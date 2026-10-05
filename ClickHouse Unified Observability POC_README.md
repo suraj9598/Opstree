@@ -4,7 +4,20 @@
 
 This README is a complete setup and reproduction guide for the ClickHouse Unified Observability POC performed on a local Kubernetes cluster using Kind.
 
-In this POC, two environments are kept separate:
+The document is written so that a fresher can understand:
+
+- What each component does.
+- Why each component is required.
+- How the Kubernetes environment was created.
+- How ClickHouse was installed and configured.
+- How logs, metrics, and traces were collected and stored in ClickHouse.
+- How Grafana was connected to the local Kubernetes environment.
+- How the traditional observability stack was deployed separately.
+- How logs, metrics, and traces were verified.
+- What troubleshooting issues occurred and how they were resolved.
+- Which configurations are specific to this local lab and should not automatically be copied into production.
+
+The two environments are kept separate:
 
 1. **ClickHouse-based observability stack**
 2. **Traditional observability stack**
@@ -61,6 +74,59 @@ The ClickHouse POC uses ClickHouse as the common storage backend for logs, metri
 | SSH reverse tunnel | Makes the local Kind services reachable from Grafana on AWS |
 
 ---
+
+## Helm Usage in This POC
+
+**Helm was used for the installations throughout this POC.** Helm was the common installation and package-management method for the Kubernetes components deployed in the lab.
+
+The following components were installed using Helm:
+
+- cert-manager
+- ClickHouse Operator
+- Fluent Bit
+- Node Exporter
+- Kube-State-Metrics
+- OpenTelemetry Collector
+- VictoriaMetrics
+- vmagent
+- Loki
+- Tempo
+
+### How ClickHouse Was Installed with Helm
+
+For ClickHouse, Helm was used to install the **ClickHouse Operator**:
+
+```bash
+helm install clickhouse-operator \
+  --create-namespace \
+  -n clickhouse-operator-system \
+  oci://ghcr.io/clickhouse/clickhouse-operator-helm
+```
+
+The ClickHouse server and Keeper were then created and managed by the Operator using `ClickHouseCluster` and `KeeperCluster` Custom Resources.
+
+The flow is:
+
+```text
+Helm
+  ↓
+ClickHouse Operator
+  ↓
+ClickHouseCluster / KeeperCluster
+  ↓
+ClickHouse Server / ClickHouse Keeper
+```
+
+So this POC uses Helm for installation, while the ClickHouse Operator manages the ClickHouse and Keeper workloads after installation.
+
+Repositories used in the POC include:
+
+```bash
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo add grafana https://grafana.github.io/helm-charts
+helm repo add vm https://victoriametrics.github.io/helm-charts
+helm repo update
+```
 
 # 3. Prerequisites
 
@@ -183,6 +249,8 @@ kubectl get namespace clickhouse
 ---
 
 # 7. Install cert-manager
+**Installation method: Helm.** cert-manager was installed using its OCI Helm chart.
+
 
 cert-manager was installed because the Kubernetes environment used certificate/webhook-related functionality.
 
@@ -208,6 +276,8 @@ All cert-manager pods should become `Running`.
 ---
 
 # 8. Install the ClickHouse Operator
+**Installation method: Helm.** The ClickHouse Operator was installed using its Helm chart.
+
 
 The ClickHouse Operator manages ClickHouse custom resources and creates the required Kubernetes objects.
 
@@ -614,6 +684,8 @@ GROUP BY database, table;
 ---
 
 # 18. Deploy Fluent Bit for ClickHouse Logs
+**Installation method: Helm.** Fluent Bit was deployed as a Helm release and configured through Helm values.
+
 
 Fluent Bit collects Kubernetes container logs.
 
@@ -796,6 +868,8 @@ status=200
 ---
 
 # 21. Node Exporter
+**Installation method: Helm.** Node Exporter was installed using the Prometheus Community Helm chart.
+
 
 Node Exporter exposes operating-system metrics such as:
 
@@ -837,6 +911,8 @@ kubectl get svc -n monitoring
 ---
 
 # 22. Kube-State-Metrics
+**Installation method: Helm.** Kube-State-Metrics was installed using the Prometheus Community Helm chart.
+
 
 Kube-State-Metrics exposes Kubernetes object state, including:
 
@@ -891,6 +967,8 @@ The OpenTelemetry Collector was configured to access this endpoint.
 ---
 
 # 24. OpenTelemetry Collector for Metrics and Traces
+**Installation method: Helm.** The OpenTelemetry Collector was installed using its Helm chart and configured through Helm values.
+
 
 The OpenTelemetry Collector is the central collection component for metrics and traces.
 
@@ -1826,6 +1904,8 @@ kubectl create namespace traditional-observability
 ---
 
 # 48. VictoriaMetrics
+**Installation method: Helm.** VictoriaMetrics was installed using the VictoriaMetrics Helm chart.
+
 
 VictoriaMetrics is the metrics storage backend.
 
@@ -1871,6 +1951,8 @@ VictoriaMetrics listens on:
 ---
 
 # 49. vmagent
+**Installation method: Helm.** vmagent was installed using the VictoriaMetrics Agent Helm chart and a custom values file.
+
 
 vmagent scrapes Prometheus-compatible metrics and forwards them to VictoriaMetrics.
 
@@ -2025,6 +2107,8 @@ up = 1
 ---
 
 # 52. Loki
+**Installation method: Helm.** Loki was installed using the Grafana Loki Stack Helm chart used in this lab.
+
 
 Loki is the traditional log backend.
 
@@ -2118,6 +2202,8 @@ ready
 ---
 
 # 54. Traditional Fluent Bit → Loki
+**Installation method: Helm.** The traditional Fluent Bit deployment was managed as a Helm release.
+
 
 A second Fluent Bit release was used for the traditional stack.
 

@@ -4,20 +4,8 @@
 
 This README is a complete setup and reproduction guide for the ClickHouse Unified Observability POC performed on a local Kubernetes cluster using Kind.
 
-The document is written so that a fresher can understand:
 
-- What each component does.
-- Why each component is required.
-- How the Kubernetes environment was created.
-- How ClickHouse was installed and configured.
-- How logs, metrics, and traces were collected and stored in ClickHouse.
-- How Grafana was connected to the local Kubernetes environment.
-- How the traditional observability stack was deployed separately.
-- How logs, metrics, and traces were verified.
-- What troubleshooting issues occurred and how they were resolved.
-- Which configurations are specific to this local lab and should not automatically be copied into production.
-
-The two environments are kept separate:
+In this POC, two environments are kept separate:
 
 1. **ClickHouse-based observability stack**
 2. **Traditional observability stack**
@@ -325,12 +313,12 @@ The issue was related to DNS lookup behavior in the isolated Kind lab.
 A lab-specific DNS configuration was used in CoreDNS:
 
 ```text
-forward . 8.8.8.8 1.1.1.1 {
+forward. 8.8.8.8 1.1.1.1 {
   max_concurrent 1000
 }
 ```
 
-> **Lab note:** Do not blindly copy public DNS forwarding into production Kubernetes. Production DNS should normally follow the organization's DNS architecture.
+> **Lab note:** Do not copy public DNS forwarding into production Kubernetes. Production DNS should normally follow the organization's DNS architecture.
 
 The operator deployment was also configured with:
 
@@ -363,7 +351,7 @@ kubectl rollout status deployment/clickhouse-operator-controller-manager \
 
 ClickHouse Keeper provides coordination functionality used by ClickHouse.
 
-For the low-resource POC, one Keeper replica was used.
+For the low-resource POC, we used one Keeper replica.
 
 Create `keeper.yaml`:
 
@@ -534,7 +522,7 @@ kubectl get pods -n clickhouse
 
 # 13. Connect to ClickHouse
 
-The ClickHouse client was available in the ClickHouse pod.
+The ClickHouse client is available in the ClickHouse pod.
 
 Find the pod:
 
@@ -1092,7 +1080,7 @@ yes
 
 # 27. Prometheus Scrape Configuration in OTel Collector
 
-The collector used Kubernetes service discovery.
+The collector uses Kubernetes service discovery.
 
 Node Exporter:
 
@@ -1483,304 +1471,7 @@ observability
 
 ---
 
-# 37. ClickHouse Grafana Dashboard
-
-The dashboard was named:
-
-```text
-Clickhouse Observability
-```
-
-It contained the following sections.
-
-## Logs
-
-### Kubernetes Logs
-
-```sql
-SELECT
-    timestamp,
-    namespace,
-    pod,
-    container,
-    node,
-    message
-FROM observability.kubernetes_logs
-WHERE $__timeFilter(timestamp)
-ORDER BY timestamp DESC
-LIMIT 100;
-```
-
-### Log Volume
-
-```sql
-SELECT
-    toStartOfMinute(timestamp) AS time,
-    count() AS log_count
-FROM observability.kubernetes_logs
-WHERE $__timeFilter(timestamp)
-GROUP BY time
-ORDER BY time;
-```
-
-### Error Log Count
-
-```sql
-SELECT count() AS error_count
-FROM observability.kubernetes_logs
-WHERE $__timeFilter(timestamp)
-  AND positionCaseInsensitive(message, 'ERROR') > 0;
-```
-
-### Logs by Namespace
-
-```sql
-SELECT
-    namespace,
-    count() AS log_count
-FROM observability.kubernetes_logs
-WHERE $__timeFilter(timestamp)
-GROUP BY namespace
-ORDER BY log_count DESC;
-```
-
----
-
-# 38. Host Resource Panels
-
-The dashboard used ClickHouse metrics to display:
-
-- CPU cores
-- CPU utilization
-- Total memory
-- Memory utilization
-- Storage
-- Storage utilization
-- Disk I/O
-- Network throughput
-
-For example, CPU metrics came from:
-
-```text
-node_cpu_seconds_total
-```
-
-Memory metrics used:
-
-```text
-node_memory_MemTotal_bytes
-node_memory_MemAvailable_bytes
-```
-
----
-
-# 39. Kubernetes Workload Panels
-
-The dashboard included:
-
-- Pods by namespace
-- Pod status
-- Pod details
-- Pod CPU
-- Pod memory
-- Pod network
-- Pod restart information
-
-Kubernetes metrics came primarily from:
-
-```text
-kube_pod_info
-kube_pod_status_phase
-container_cpu_*
-container_memory_*
-```
-
----
-
-# 40. Trace Panels
-
-The trace dashboard included:
-
-- Trace count
-- Average trace duration
-- Trace details
-
-Example query:
-
-```sql
-SELECT
-    Timestamp AS time,
-    ResourceAttributes['service.name'] AS service,
-    SpanName,
-    TraceId,
-    SpanId
-FROM observability.otel_traces
-WHERE $__timeFilter(Timestamp)
-ORDER BY Timestamp DESC
-LIMIT 100;
-```
-
----
-
-# 41. Data Volume and Storage
-
-The dashboard also displayed the number of records stored by signal.
-
-Logs:
-
-```sql
-SELECT count()
-FROM observability.kubernetes_logs;
-```
-
-Metrics:
-
-```sql
-SELECT sum(rows)
-FROM system.parts
-WHERE active = 1
-  AND database = 'observability'
-  AND table LIKE 'otel_metrics_%';
-```
-
-Traces:
-
-```sql
-SELECT count()
-FROM observability.otel_traces;
-```
-
----
-
-# 42. ClickHouse Physical Storage
-
-To calculate active ClickHouse storage:
-
-```sql
-SELECT
-    round(sum(bytes_on_disk) / 1024 / 1024, 2) AS storage_mb
-FROM system.parts
-WHERE active = 1;
-```
-
-For per-table storage:
-
-```sql
-SELECT
-    database,
-    table,
-    round(sum(bytes_on_disk) / 1024 / 1024, 2) AS storage_mb
-FROM system.parts
-WHERE active = 1
-GROUP BY database, table
-ORDER BY storage_mb DESC;
-```
-
----
-
-# 43. ClickHouse Compression
-
-Compression can be calculated using `system.columns`.
-
-```sql
-SELECT
-    database,
-    table,
-    formatReadableSize(sum(data_uncompressed_bytes)) AS uncompressed,
-    formatReadableSize(sum(data_compressed_bytes)) AS compressed,
-    round(
-        sum(data_uncompressed_bytes)
-        / nullIf(sum(data_compressed_bytes), 0),
-        2
-    ) AS compression_ratio
-FROM system.columns
-WHERE database = 'observability'
-GROUP BY database, table
-ORDER BY sum(data_compressed_bytes) DESC;
-```
-
-An observed POC snapshot showed an overall compression ratio of approximately:
-
-```text
-54.1 : 1
-```
-
-Individual tables showed different ratios.
-
-For example:
-
-```text
-otel_metrics_gauge     ~57.7 : 1
-otel_metrics_sum       ~55.7 : 1
-kubernetes_logs        ~21.8 : 1
-```
-
-These are measurements from the POC dataset at that time. They are not universal ClickHouse compression guarantees.
-
----
-
-# 44. ClickHouse Health Panels
-
-## Running ClickHouse Pods
-
-```sql
-SELECT
-    countDistinct(Attributes['uid']) AS running_pods
-FROM observability.otel_metrics_gauge
-WHERE MetricName = 'kube_pod_status_phase'
-  AND Attributes['namespace'] = 'clickhouse'
-  AND Attributes['phase'] = 'Running'
-  AND Value = 1;
-```
-
-## ClickHouse Memory
-
-```sql
-SELECT
-    max(memory_bytes) / 1024 / 1024 AS memory_mb
-FROM
-(
-    SELECT
-        Attributes['pod'] AS pod,
-        Attributes['container'] AS container,
-        argMax(Value, TimeUnix) AS memory_bytes
-    FROM observability.otel_metrics_gauge
-    WHERE MetricName = 'container_memory_working_set_bytes'
-      AND Attributes['namespace'] = 'clickhouse'
-      AND Attributes['pod'] LIKE 'clickhouse-clickhouse%'
-      AND Attributes['container'] != ''
-    GROUP BY pod, container
-);
-```
-
-## Recent ClickHouse Queries
-
-```sql
-SELECT
-    event_time AS Time,
-    user AS User,
-    query AS Query,
-    query_duration_ms AS "Duration (ms)",
-    read_rows AS "Read Rows",
-    written_rows AS "Written Rows"
-FROM system.query_log
-WHERE type = 'QueryFinish'
-ORDER BY event_time DESC
-LIMIT 50;
-```
-
-## Query Errors
-
-```sql
-SELECT count() AS error_count
-FROM system.query_log
-WHERE type IN ('ExceptionWhileProcessing', 'ExceptionBeforeStart')
-  AND event_time >= now() - INTERVAL 1 HOUR;
-```
-
----
-
-# 45. Important ClickHouse Troubleshooting
+# 37. Important ClickHouse Troubleshooting
 
 ## Problem: ClickHouse Memory Limit Exceeded
 
@@ -1858,7 +1549,7 @@ sudo sysctl --system
 
 # Part 2 — Traditional Observability Stack
 
-# 46. Traditional Architecture
+# 38. Traditional Architecture
 
 The traditional POC was deployed separately in:
 
@@ -1895,7 +1586,7 @@ Traces  → Tempo
 
 ---
 
-# 47. Create Traditional Observability Namespace
+# 39. Create Traditional Observability Namespace
 
 ```bash
 kubectl create namespace traditional-observability
@@ -1903,7 +1594,7 @@ kubectl create namespace traditional-observability
 
 ---
 
-# 48. VictoriaMetrics
+# 40. VictoriaMetrics
 **Installation method: Helm.** VictoriaMetrics was installed using the VictoriaMetrics Helm chart.
 
 
@@ -1950,7 +1641,7 @@ VictoriaMetrics listens on:
 
 ---
 
-# 49. vmagent
+# 41. vmagent
 **Installation method: Helm.** vmagent was installed using the VictoriaMetrics Agent Helm chart and a custom values file.
 
 
@@ -2024,7 +1715,7 @@ helm install vmagent \
 
 ---
 
-# 50. vmagent RBAC
+# 42. vmagent RBAC
 
 Create:
 
@@ -2072,7 +1763,7 @@ yes
 
 ---
 
-# 51. Verify VictoriaMetrics
+# 43. Verify VictoriaMetrics
 
 Port-forward:
 
@@ -2106,7 +1797,7 @@ up = 1
 
 ---
 
-# 52. Loki
+# 44. Loki
 **Installation method: Helm.** Loki was installed using the Grafana Loki Stack Helm chart used in this lab.
 
 
@@ -2186,7 +1877,7 @@ Loki listens on:
 
 ---
 
-# 53. Loki Health Check
+# 45. Loki Health Check
 
 ```bash
 kubectl exec -n traditional-observability loki-stack-0 -- \
@@ -2201,7 +1892,7 @@ ready
 
 ---
 
-# 54. Traditional Fluent Bit → Loki
+# 46. Traditional Fluent Bit → Loki
 **Installation method: Helm.** The traditional Fluent Bit deployment was managed as a Helm release.
 
 
@@ -2264,7 +1955,7 @@ Loki
 
 ---
 
-# 55. Verify Loki Labels
+# 47. Verify Loki Labels
 
 After logs are ingested:
 
@@ -2290,7 +1981,7 @@ This confirms that Kubernetes log labels were being stored.
 
 ---
 
-# 56. Query Loki Logs
+# 48. Query Loki Logs
 
 Example LogQL:
 
@@ -2302,7 +1993,7 @@ This returned real Kubernetes logs.
 
 ---
 
-# 57. Loki Compatibility Limitation
+# 49. Loki Compatibility Limitation
 
 Loki 2.6.1 was used because it was the working configuration for this lab.
 
@@ -2317,11 +2008,11 @@ However:
 - Real log queries worked.
 - Grafana Explore could display logs.
 
-Therefore, the limitation was documented rather than treating it as an ingestion failure.
+Therefore, the limitation was documented rather than treated as an ingestion failure.
 
 ---
 
-# 58. Tempo
+# 50. Tempo
 
 Tempo is the traditional trace backend.
 
@@ -2383,7 +2074,7 @@ tempo-0   1/1   Running
 
 ---
 
-# 59. Tempo Ports
+# 51. Tempo Ports
 
 Tempo exposed:
 
@@ -2408,7 +2099,7 @@ ready
 
 ---
 
-# 60. Traditional OpenTelemetry Collector
+# 52. Traditional OpenTelemetry Collector
 
 The traditional collector was configured only for traces.
 
@@ -2448,7 +2139,7 @@ tempo.traditional-observability.svc.cluster.local:4317
 
 ---
 
-# 61. Generate a Traditional Test Trace
+# 53. Generate a Traditional Test Trace
 
 A test trace was generated with:
 
@@ -2469,7 +2160,7 @@ Example TraceQL:
 
 ---
 
-# 62. Expose Traditional Services with NodePorts
+# 55. Expose Traditional Services with NodePorts
 
 The traditional services were exposed using NodePorts.
 
@@ -2487,7 +2178,7 @@ kubectl get svc -n traditional-observability
 
 ---
 
-# 63. Test Traditional NodePorts
+# 56. Test Traditional NodePorts
 
 Using Kind worker IP:
 
@@ -2533,7 +2224,7 @@ ready
 
 ---
 
-# 64. Reverse Tunnel for Traditional Stack
+# 57. Reverse Tunnel for Traditional Stack
 
 The Grafana EC2 instance needs access to the local Kind NodePorts.
 
@@ -2569,9 +2260,9 @@ ready
 
 ---
 
-# 65. Grafana Datasources
+# 58. Grafana Datasources
 
-The Grafana server contained these datasources:
+The Grafana server contained these data sources:
 
 | Datasource | Backend |
 |---|---|
@@ -2586,228 +2277,7 @@ The traditional datasources read from their specialized backends.
 
 ---
 
-# 66. Comparison Dashboard
-
-A separate Grafana dashboard was created:
-
-```text
-ClickHouse vs Traditional Observability
-```
-
-The dashboard compares the two architectures.
-
-Panels created:
-
-1. Log Volume: ClickHouse vs Loki
-2. Metrics Availability: ClickHouse vs VictoriaMetrics
-3. Trace Volume: ClickHouse vs Tempo
-4. Storage Usage: ClickHouse vs Traditional Stack
-
----
-
-# 67. Log Volume Comparison
-
-ClickHouse query:
-
-```sql
-SELECT
-    toStartOfMinute(timestamp) AS time,
-    count() AS "ClickHouse"
-FROM observability.kubernetes_logs
-WHERE $__timeFilter(timestamp)
-GROUP BY time
-ORDER BY time;
-```
-
-Loki query:
-
-```logql
-sum(count_over_time({namespace=~".+"}[1m]))
-```
-
-The panel uses Grafana's Mixed datasource mode.
-
----
-
-# 68. Metrics Comparison
-
-ClickHouse:
-
-```sql
-SELECT
-    toStartOfMinute(TimeUnix) AS time,
-    uniq(MetricName) AS "ClickHouse"
-FROM observability.otel_metrics_gauge
-WHERE $__timeFilter(TimeUnix)
-GROUP BY time
-ORDER BY time;
-```
-
-VictoriaMetrics:
-
-```promql
-count({__name__=~".+"})
-```
-
-> These two queries measure different things: ClickHouse counts unique metric names in the selected table, while VictoriaMetrics counts active series. This difference should be kept in mind when interpreting the graph.
-
----
-
-# 69. Trace Comparison
-
-ClickHouse:
-
-```sql
-SELECT
-    toStartOfMinute(Timestamp) AS time,
-    count() AS "ClickHouse"
-FROM observability.otel_traces
-WHERE $__timeFilter(Timestamp)
-GROUP BY time
-ORDER BY time;
-```
-
-Tempo:
-
-```text
-{} | count_over_time()
-```
-
-Grafana Tempo range queries require an appropriate step. A 1-minute step was used in the POC.
-
----
-
-# 70. Traditional Storage Inspection
-
-Kubernetes PVCs:
-
-```bash
-kubectl get pvc -n traditional-observability
-```
-
-The POC had:
-
-```text
-VictoriaMetrics PVC  → 16Gi
-Loki PVC              → 5Gi
-Tempo PVC             → 5Gi
-```
-
-Actual data directory snapshots were also checked.
-
-Loki:
-
-```bash
-kubectl exec -n traditional-observability loki-stack-0 -- \
-  du -sh /data
-```
-
-Observed:
-
-```text
-10.4M
-```
-
-VictoriaMetrics:
-
-```bash
-kubectl exec -n traditional-observability \
-  victoria-metrics-victoria-metrics-single-server-0 \
-  -- du -sh /storage
-```
-
-Observed:
-
-```text
-29.4M
-```
-
-Tempo:
-
-```bash
-kubectl exec -n traditional-observability tempo-0 -- \
-  du -sh /var/tempo
-```
-
-Observed:
-
-```text
-168.0K
-```
-
-These values are point-in-time usage snapshots and should not be interpreted as direct compression comparisons.
-
----
-
-# 71. Why PVC Metrics Were Not Used
-
-An attempt was made to query:
-
-```promql
-kubelet_volume_stats_used_bytes
-```
-
-However, the kubelet metrics endpoint in the Kind environment did not expose the expected volume usage gauges.
-
-Checking:
-
-```bash
-kubectl get --raw \
-  "/api/v1/nodes/kind-clickhouse-poc-worker/proxy/metrics" \
-  | grep kubelet_volume_stats_used_bytes
-```
-
-returned no matching metric.
-
-Only volume collection duration metrics were available.
-
-Therefore, actual container data directories were inspected with `du -sh` instead.
-
----
-
-# 72. Grafana EC2 Disk Issue
-
-During the POC, the Grafana EC2 root filesystem became full.
-
-The initial state was approximately:
-
-```text
-/dev/root   19G   19G   0   100%
-```
-
-The major usage was under:
-
-```text
-/var/log
-```
-
-The Grafana database itself was much smaller.
-
-The EC2 root EBS volume was increased from:
-
-```text
-19 GiB → 40 GiB
-```
-
-After increasing the EBS volume, the Linux partition/filesystem also needs to be expanded.
-
-For the ext4 root filesystem:
-
-```bash
-sudo resize2fs /dev/nvme0n1p1
-```
-
-Verify:
-
-```bash
-df -h /
-```
-
-> Increasing an AWS EBS volume does not automatically mean the filesystem has expanded. Both the block device and filesystem need to reflect the new size.
-
----
-
-# 73. Traditional Stack Verification Checklist
+# 60. Traditional Stack Verification Checklist
 
 Run:
 
@@ -2862,7 +2332,7 @@ kubectl exec -n traditional-observability tempo-0 -- \
 
 ---
 
-# 74. Complete ClickHouse Verification Checklist
+# 61. Complete ClickHouse Verification Checklist
 
 ## Kubernetes
 
@@ -2926,7 +2396,7 @@ FROM observability.otel_traces;
 
 ---
 
-# 75. Useful ClickHouse System Queries
+# 62. Useful ClickHouse System Queries
 
 Check databases:
 
@@ -2991,7 +2461,7 @@ LIMIT 20;
 
 ---
 
-# 76. End-to-End Data Flow
+# 63. End-to-End Data Flow
 
 ## Logs
 
@@ -3043,7 +2513,7 @@ Grafana
 
 ---
 
-# 77. Traditional End-to-End Data Flow
+# 64. Traditional End-to-End Data Flow
 
 ## Logs
 
@@ -3087,92 +2557,8 @@ Grafana
 
 ---
 
-# 78. Important Lab-Specific Notes
 
-The following configurations were used specifically because this was a local Kind-based POC:
-
-- Kind local-path storage.
-- NodePort exposure.
-- SSH reverse tunnels.
-- `fs.inotify.max_user_instances=1024`.
-- Fluent Bit `Inotify_Watcher false`.
-- ClickHouse default user without a configured password.
-- CoreDNS public DNS forwarding.
-- `ndots=1` for the ClickHouse Operator.
-- `insecure_skip_verify: true` for local cAdvisor scraping.
-- Single ClickHouse shard and replica.
-- Single Keeper replica.
-- Local Tempo storage.
-- Loki 2.6.1 compatibility configuration.
-
-These settings should be reviewed before being used in production.
-
----
-
-# 79. Reproduction Order for a Fresher
-
-If the POC needs to be recreated from scratch, follow this order:
-
-```text
-1. Install Docker
-2. Install kubectl
-3. Install Kind
-4. Install Helm
-5. Create Kind cluster
-6. Verify Kubernetes nodes
-7. Create clickhouse namespace
-8. Install cert-manager
-9. Install ClickHouse Operator
-10. Fix/verify operator DNS if required
-11. Deploy ClickHouse Keeper
-12. Deploy ClickHouse
-13. Verify ClickHouse
-14. Create observability database
-15. Create sample MergeTree table
-16. Deploy Fluent Bit
-17. Create Kubernetes logs table
-18. Verify logs in ClickHouse
-19. Deploy Node Exporter
-20. Deploy Kube-State-Metrics
-21. Configure OTel Collector RBAC
-22. Configure Prometheus receiver
-23. Configure cAdvisor scraping
-24. Configure ClickHouse exporter
-25. Verify metrics in ClickHouse
-26. Configure OTLP receiver
-27. Generate test trace
-28. Verify traces in ClickHouse
-29. Expose ClickHouse through NodePort
-30. Create SSH reverse tunnel
-31. Configure Grafana ClickHouse datasource
-32. Build ClickHouse dashboard
-
-Traditional stack:
-
-33. Create traditional-observability namespace
-34. Install VictoriaMetrics
-35. Install vmagent
-36. Configure vmagent RBAC
-37. Verify metrics
-38. Install Loki
-39. Deploy traditional Fluent Bit
-40. Verify Loki logs
-41. Install Tempo
-42. Deploy traditional OTel Collector
-43. Generate test trace
-44. Verify Tempo
-45. Create NodePorts
-46. Create SSH reverse tunnels
-47. Add Loki datasource
-48. Add VictoriaMetrics datasource
-49. Add Tempo datasource
-50. Build comparison dashboard
-51. Perform final end-to-end verification
-```
-
----
-
-# 80. Final State
+# 65. Final State
 
 At the end of the POC, the local Kubernetes environment contained two independently operating observability architectures.
 

@@ -4,20 +4,7 @@
 
 This README is a complete setup and reproduction guide for the ClickHouse Unified Observability POC performed on a local Kubernetes cluster using Kind.
 
-The document is written so that a fresher can understand:
-
-- What each component does.
-- Why each component is required.
-- How the Kubernetes environment was created.
-- How ClickHouse was installed and configured.
-- How logs, metrics, and traces were collected and stored in ClickHouse.
-- How Grafana was connected to the local Kubernetes environment.
-- How the traditional observability stack was deployed separately.
-- How logs, metrics, and traces were verified.
-- What troubleshooting issues occurred and how they were resolved.
-- Which configurations are specific to this local lab and should not automatically be copied into production.
-
-The two environments are kept separate:
+In this POC two environments are kept separate:
 
 1. **ClickHouse-based observability stack**
 2. **Traditional observability stack**

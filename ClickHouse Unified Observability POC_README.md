@@ -1,8 +1,8 @@
-# ClickHouse Unified Observability POC — Complete Setup Guide
+# ClickHouse Unified Observability POC
 
 ## 1. Purpose of This Document
 
-This README is a complete setup and reproduction guide for the ClickHouse Unified Observability POC performed on a local Kubernetes cluster using Kind.
+This README is a complete ClickHouse Unified Observability POC performed on a local Kubernetes cluster using Kind.
 
 
 In this POC, two environments are kept separate:
@@ -146,9 +146,6 @@ Verify Docker is running:
 ```bash
 docker ps
 ```
-
-> **Important:** An existing company Kubernetes context was present on the laptop. The POC was created in a separate Kind cluster. Do not modify the company `readonly-context`.
-
 ---
 
 # 4. Create the Kind Kubernetes Cluster
@@ -318,7 +315,7 @@ forward. 8.8.8.8 1.1.1.1 {
 }
 ```
 
-> **Lab note:** Do not copy public DNS forwarding into production Kubernetes. Production DNS should normally follow the organization's DNS architecture.
+> **Note:** Do not copy public DNS forwarding into production Kubernetes. Production DNS should normally follow the organization's DNS architecture.
 
 The operator deployment was also configured with:
 

@@ -4,7 +4,7 @@
 
 This README is a complete setup and reproduction guide for the ClickHouse Unified Observability POC performed on a local Kubernetes cluster using Kind.
 
-In this POC two environments are kept separate:
+In this POC, two environments are kept separate:
 
 1. **ClickHouse-based observability stack**
 2. **Traditional observability stack**

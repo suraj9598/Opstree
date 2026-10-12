@@ -4,7 +4,6 @@
 **Environment:** Local Kubernetes Kind cluster (`kind-kind-clickhouse-poc`)  
 **Purpose:** Compare a ClickHouse-centered observability design with a traditional multi-backend design  
 **Status:** Functional checks completed for selected paths; Grafana datasource troubleshooting and controlled benchmarking remain follow-up work  
-**Document date:** 12 October 2026
 
 > **Important:** This is a POC report, not a production benchmark. Results are environment-, workload-, and time-specific. Multiple snapshots collected at different times are kept separate rather than silently combined.
 
@@ -643,8 +642,6 @@ Suggested panel order:
 10. **Loki Logs Explorer** — `{namespace="clickhouse"}`.
 11. **Tempo Trace Search** — search a known service or trace ID.
 12. **POC Notes / Limitations** — text panel describing benchmark scope and caveats.
-
-Do not compare values with different meanings on the same axis. A recorded benchmark table is not live data; label it as a snapshot.
 
 ---
 

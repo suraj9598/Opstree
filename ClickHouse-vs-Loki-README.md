@@ -1,4 +1,4 @@
-# ClickHouse vs Loki — Verified POC Comparison
+# ClickHouse vs Loki — Comparison
 
 ## 1. Purpose
 
@@ -170,7 +170,7 @@ kubectl get pvc -n clickhouse
 kubectl get pvc -n traditional-observability
 ```
 
-These commands show pod and PVC status. They do not by themselves measure table size, query latency, or equivalent log volume.
+These commands show pod and PVC status. They do not, by themselves, measure table size, query latency, or equivalent log volume.
 
 ## 9. What the POC supports concluding
 
@@ -199,7 +199,6 @@ These commands show pod and PVC status. They do not by themselves measure table 
 - [ ] Open every Grafana panel and record the exact query and unit.
 - [ ] Re-run comparable query tests with the same time range and filters.
 - [ ] Record the timestamp of each measurement.
-- [ ] Save the dashboard and update this README with verified results only.
 
 ## 11. Presentation-ready conclusion
 

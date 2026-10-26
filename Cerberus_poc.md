@@ -35,7 +35,7 @@ The objective of this POC is to use Cerberus as a Loki-compatible query layer be
 
 ## Table of Contents
 
-- [1. Purpose](#1-purpose)
+- [1. Objective](#1-Objective)
 - [2. POC Goals](#2-poc-goals)
 - [3. Kubernetes Environment](#3-kubernetes-environment)
 - [4. Architecture](#4-architecture)

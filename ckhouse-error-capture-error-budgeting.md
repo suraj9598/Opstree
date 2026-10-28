@@ -903,3 +903,7 @@ failures. HTTP 200 at the router also does not by itself prove that a LogQL
 query returned correct results from ClickHouse. Validate request coverage,
 query correctness, and the provisional HTTP 4xx policy before treating this as
 a production SLO.
+
+## 16 Conclusion
+
+The ClickHouse Error Capture and Error Budgeting POC demonstrates automatic error logging using a materialized view and a dedicated `otel_errors` table. By combining error records with successful request logs, we calculated the provisional 99.9% SLO, availability SLI, and remaining Error Budget. The current sample shows 100% availability, 0% budget consumed, and 100% budget remaining, with no eligible production HTTP 5xx failures observed. Full 30-day log coverage and end-to-end query validation are still required before confirming SLO compliance.

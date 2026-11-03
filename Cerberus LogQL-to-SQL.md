@@ -23,7 +23,7 @@ The intended compatibility path is:
 
 This POC is a query-compatibility proof, not a production-readiness or performance benchmark.
 
-## 2. Problem Statement and Business Motivation
+## 2. Problem Statement
 
 The existing observability environment has dashboards that query Loki using LogQL. Recreating dashboards and rewriting all panels as ClickHouse SQL would increase migration effort and create dashboard maintenance overhead.
 

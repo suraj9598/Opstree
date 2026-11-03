@@ -1,6 +1,7 @@
 # Cerberus LogQL-to-SQL POC with ClickHouse
 
 > **Document purpose:** This README describes the log-query compatibility POC: Grafana sends Loki-compatible LogQL to Cerberus, Cerberus translates the query into ClickHouse SQL, and ClickHouse executes it against OpenTelemetry logs.
+> 
 > **Scope:** Logs only for this Cerberus POC. Metrics and traces are outside the migration scope of this POC.
 
 

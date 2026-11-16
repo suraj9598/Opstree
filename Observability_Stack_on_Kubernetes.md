@@ -1,4 +1,4 @@
-# High Availability Observability Stack on Kubernetes
+# Observability Stack on Kubernetes
 
 ## 1. Project Overview
 

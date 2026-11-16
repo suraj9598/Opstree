@@ -5021,3 +5021,661 @@ kubectl get configmap -n tracing \
 | Test Trace Ingestion | Successful |
 | Tempo Trace Retrieval | Successful |
 
+# 16. Grafana Setup
+
+## 16.1 Overview
+
+Grafana is an open-source visualization and monitoring platform used to create dashboards and visualize metrics, logs, and distributed traces.
+
+In this POC, Grafana is deployed in the `monitoring` namespace of the `ha-observability` Kubernetes cluster.
+
+Grafana acts as the central visualization layer for the observability stack.
+
+The existing observability components include:
+
+- VictoriaMetrics for metrics storage.
+- Loki for log storage.
+- Tempo for distributed trace storage.
+- OpenTelemetry Collector for receiving and forwarding telemetry data.
+
+Grafana will be used to connect with these backends and visualize their data through dashboards.
+
+**Current Scope:**
+
+- Grafana is deployed with one replica.
+- Persistent storage is enabled through a 5Gi PVC.
+- Grafana is exposed internally through a ClusterIP Service.
+- No datasource has been configured yet.
+- Browser access is performed through Kubernetes port-forwarding.
+- Multi-replica Grafana HA is kept for a future phase.
+
+## 16.2 Why We Selected a Single Grafana Replica
+
+Initially, we evaluated running Grafana with two replicas.
+
+However, running multiple Grafana replicas requires proper database and storage architecture.
+
+### 1. Initial Two-Replica Approach
+
+We initially considered the following configuration:
+
+```yaml
+replicas: 2
+```
+
+The objective was to run two Grafana pods and evaluate whether both replicas could provide Grafana availability.
+
+During the Helm template validation, we observed that the chart generated:
+
+- One Grafana Deployment.
+- Two Grafana replicas.
+- One PersistentVolumeClaim named `grafana`.
+- Both replicas referenced the same PVC.
+
+The rendered configuration contained:
+
+```yaml
+replicas: 2
+```
+
+And the volume reference was:
+
+```yaml
+persistentVolumeClaim:
+  claimName: grafana
+```
+
+This configuration raised a storage and database-sharing concern.
+
+### 2. Why One PVC Is Not Suitable for Two Independent Grafana Replicas
+
+Grafana uses SQLite by default when an external database is not configured.
+
+SQLite stores Grafana application data in its local data directory.
+
+This data includes:
+
+- Dashboards created through Grafana UI.
+- Datasource configurations.
+- User information.
+- Dashboard settings.
+- Other Grafana application metadata.
+
+If two Grafana replicas use the same SQLite database concurrently, it can lead to database locking and unsupported shared-database behavior.
+
+The configured PVC also uses `ReadWriteOnce` access mode.
+
+ReadWriteOnce generally allows a volume to be mounted read-write by a single node at a time. It does not provide a shared multi-node database architecture.
+
+Therefore, simply increasing the replica count to two does not create a proper Grafana HA setup.
+
+### 3. Why We Selected One Replica
+
+For the current POC phase, we selected one Grafana replica because:
+
+- The primary objective is to deploy Grafana and verify its functionality.
+- We want to validate persistent storage.
+- We want to test whether Grafana data survives pod recreation.
+- We do not want to introduce PostgreSQL and additional database configuration at this stage.
+- One replica with one PVC provides a simpler and more predictable initial deployment.
+
+### 4. Why We Did Not Select Multi-Replica Deployment
+
+A proper multi-replica Grafana architecture requires a shared database backend.
+
+For example:
+
+- Two or more Grafana replicas.
+- Shared PostgreSQL database.
+- Both Grafana replicas connected to the same database.
+- Appropriate session handling.
+- Replicas distributed across different Kubernetes nodes.
+- Suitable storage and recovery configuration for the database.
+
+With this architecture, both Grafana replicas can access the same dashboards, users, and datasource configurations.
+
+This architecture can be implemented in a future phase.
+
+### 5. Single Replica vs Multi-Replica Comparison
+
+| Configuration | Single Replica | Multi-Replica |
+|---|---|---|
+| Grafana Pods | 1 | 2 or more |
+| Database | Default SQLite | Shared PostgreSQL recommended |
+| PVC | One PVC | Database storage managed separately |
+| Configuration Complexity | Low | Higher |
+| Dashboard Sharing | Single Grafana instance | Shared through common database |
+| Pod Failure Recovery | Kubernetes recreates the pod | Another replica can serve requests |
+| Node Failure Handling | Depends on storage and scheduling | Depends on replica distribution and database availability |
+| HA Architecture | No | Possible with complete HA design |
+
+**Important:** The current setup is a single-replica Grafana deployment with persistent storage. It should not be considered a fully highly available Grafana architecture.
+
+## 16.3 Deployment Details
+
+| Configuration | Value |
+|---|---|
+| Component | Grafana |
+| Namespace | `monitoring` |
+| Helm Release | `grafana` |
+| Helm Repository | `grafana` |
+| Helm Chart | `grafana/grafana` |
+| Chart Version | `10.5.15` |
+| Grafana App Version | `12.3.1` |
+| Deployment Type | Deployment |
+| Replicas | 1 |
+| Service Type | ClusterIP |
+| Service Port | 80 |
+| Container Port | 3000 |
+| Storage Type | PersistentVolumeClaim |
+| PVC Name | `grafana` |
+| Storage Capacity | 5Gi |
+| Access Mode | ReadWriteOnce |
+| StorageClass | `standard` |
+| Datasource Configuration | Not configured |
+
+## 16.4 Grafana Helm Repository Setup
+
+The Grafana Helm repository is used to install and manage Grafana through Helm.
+
+Add the Grafana repository:
+
+```bash
+helm repo add grafana https://grafana.github.io/helm-charts
+```
+
+Update the Helm repositories:
+
+```bash
+helm repo update
+```
+
+Search for the Grafana chart:
+
+```bash
+helm search repo grafana/grafana
+```
+
+The chart version selected for this POC was:
+
+```text
+Chart Version: 10.5.15
+App Version: 12.3.1
+```
+
+The repository was already configured, so Helm reported that it existed with the same configuration. The repository update completed successfully.
+
+## 16.5 Fetch Grafana Default Values
+
+Before creating the custom configuration, the default Helm chart values were fetched.
+
+Command:
+
+```bash
+helm show values grafana/grafana \
+  --version 10.5.15 > grafana-default-values.yaml
+```
+
+The command downloads the default values of the selected Grafana Helm chart into a local YAML file.
+
+The file was approximately 61 KB.
+
+Verify the file:
+
+```bash
+ls -lh grafana-default-values.yaml
+```
+
+### Important Default Configuration Sections
+
+The following sections were inspected before creating the custom values file.
+
+**1. Persistence**
+
+```yaml
+persistence:
+  type: pvc
+  enabled: false
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+```
+
+By default, persistence was disabled.
+
+We enabled persistence so that Grafana application data could be stored in a PersistentVolumeClaim instead of depending only on the container's writable filesystem.
+
+**2. Service**
+
+```yaml
+service:
+  enabled: true
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+```
+
+The default service type was already ClusterIP.
+
+We retained this configuration because Grafana only needs internal Kubernetes access for the current POC. External browser access can be provided through port-forwarding.
+
+**3. Admin Configuration**
+
+The chart provides an admin configuration and generates a Kubernetes Secret for the initial credentials when no existing Secret is supplied.
+
+The admin password can be retrieved from the generated Secret.
+
+**4. Datasources**
+
+```yaml
+datasources: {}
+```
+
+By default, no datasource was configured through the chart values.
+
+We kept datasources empty in the current phase. Tempo, Loki, and VictoriaMetrics integration will be configured separately in a later step.
+
+## 16.6 Create Grafana Directory
+
+Grafana configuration files are maintained in a separate directory.
+
+```bash
+mkdir -p ~/ha-observability-poc/grafana
+
+cd ~/ha-observability-poc/grafana
+```
+
+The directory contains:
+
+```text
+grafana/
+├── grafana-default-values.yaml
+├── grafana-values.yaml
+└── grafana-rendered.yaml
+```
+
+- `grafana-default-values.yaml`: Default values downloaded from the Helm chart.
+- `grafana-values.yaml`: Custom configuration used for Grafana deployment.
+- `grafana-rendered.yaml`: Rendered Kubernetes resources generated through Helm template.
+
+## 16.7 Grafana Custom Configuration
+
+**Configuration File:**
+
+`grafana/grafana-values.yaml`
+
+Create the file:
+
+```bash
+nano grafana-values.yaml
+```
+
+Add the following configuration:
+
+```yaml
+replicas: 1
+
+persistence:
+  type: pvc
+  enabled: true
+  accessModes:
+    - ReadWriteOnce
+  size: 5Gi
+
+service:
+  enabled: true
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+```
+
+### 16.7.1 Configuration Explanation
+
+| Configuration | Explanation |
+|---|---|
+| `replicas: 1` | Creates one Grafana pod. |
+| `persistence.type: pvc` | Uses PersistentVolumeClaim for storage. |
+| `persistence.enabled: true` | Enables persistent storage. |
+| `accessModes: ReadWriteOnce` | Allows read-write mounting from one node at a time. |
+| `size: 5Gi` | Requests 5Gi storage for Grafana. |
+| `service.enabled: true` | Creates a Kubernetes Service. |
+| `type: ClusterIP` | Exposes Grafana internally within the cluster. |
+| `port: 80` | Service listens on port 80. |
+| `targetPort: 3000` | Forwards traffic to the Grafana application port. |
+
+### Why Persistence Is Enabled
+
+Grafana stores its application data in its data directory.
+
+Without persistent storage, data stored only in the container's writable filesystem may be lost when the pod is recreated.
+
+With persistence enabled, the Grafana data directory is mounted from the PVC.
+
+Therefore, if the Grafana pod is deleted and recreated on a node where its local volume is accessible, the existing data can be retained.
+
+**Storage limitation:** The Kind `standard` StorageClass uses local-path storage. The PVC does not automatically provide cross-node storage replication. If the node hosting the local volume becomes unavailable, the volume may not be accessible from another node.
+
+## 16.8 Validate Grafana Helm Configuration
+
+Before applying the configuration, Helm templates were rendered to inspect the Kubernetes resources.
+
+Command:
+
+```bash
+helm template grafana grafana/grafana \
+  --version 10.5.15 \
+  --namespace monitoring \
+  -f grafana-values.yaml > grafana-rendered.yaml
+```
+
+This generates Kubernetes YAML resources without installing them.
+
+Verify the Deployment and PVC resources:
+
+```bash
+grep -nE 'kind: (Deployment|StatefulSet|PersistentVolumeClaim)|claimName:|replicas:' grafana-rendered.yaml
+```
+
+During the initial two-replica evaluation, the rendered output showed two replicas referencing one PVC.
+
+After reviewing this configuration, the replica count was changed to one.
+
+The final configuration was kept at:
+
+```yaml
+replicas: 1
+```
+
+## 16.9 Upgrade Existing Grafana Helm Release
+
+Grafana was already installed as a Helm release named `grafana`.
+
+Therefore, we used `helm upgrade` instead of `helm install`.
+
+Check the existing release:
+
+```bash
+helm list -n monitoring
+```
+
+Upgrade Grafana using the custom values file:
+
+```bash
+helm upgrade grafana grafana/grafana \
+  --version 10.5.15 \
+  --namespace monitoring \
+  -f grafana-values.yaml
+```
+
+**Observed Helm Result:**
+
+```text
+Release "grafana" has been upgraded. Happy Helming!
+
+STATUS: deployed
+REVISION: 2
+DESCRIPTION: Upgrade complete
+```
+
+Helm also displayed a warning that the selected Grafana chart is deprecated.
+
+The warning did not prevent the upgrade from completing successfully.
+
+## 16.10 Grafana PersistentVolumeClaim Verification
+
+After the upgrade, the Grafana PVC was checked.
+
+Command:
+
+```bash
+kubectl get pvc -n monitoring
+```
+
+**Observed Result:**
+
+```text
+NAME      STATUS   VOLUME                                     CAPACITY   ACCESS MODES   STORAGECLASS
+grafana   Bound    pvc-a5f59077-dc07-4f65-ad0e-252305decfbf   5Gi        RWO            standard
+```
+
+### PVC Verification Details
+
+| Configuration | Observed Result |
+|---|---|
+| PVC Name | `grafana` |
+| Status | Bound |
+| Capacity | 5Gi |
+| Access Mode | RWO |
+| StorageClass | standard |
+
+The PVC was successfully provisioned and bound to a PersistentVolume.
+
+The `standard` StorageClass in this Kind environment uses local-path storage.
+
+## 16.11 Grafana Pod Verification
+
+Check Grafana pods:
+
+```bash
+kubectl get pods -n monitoring -o wide
+```
+
+**Observed Result:**
+
+```text
+NAME                       READY   STATUS    RESTARTS   AGE   IP            NODE
+grafana-74985977c5-fh97r   1/1     Running   0          94s   10.244.2.19   ha-observability-worker
+```
+
+### Deployment Verification
+
+| Configuration | Expected Result | Observed Result |
+|---|---|---|
+| Grafana Replicas | 1 | 1 |
+| Pod Status | Running | Running |
+| Ready Containers | 1/1 | 1/1 |
+| Restart Count | 0 | 0 |
+| Node Placement | One eligible node | ha-observability-worker |
+| Persistent Storage | Bound | Bound |
+| Storage Capacity | 5Gi | 5Gi |
+
+The Grafana pod was successfully scheduled on:
+
+```text
+ha-observability-worker
+```
+
+## 16.12 Verify Deployment Rollout
+
+Check the Grafana Deployment:
+
+```bash
+kubectl get deployment -n monitoring
+```
+
+Verify the rollout:
+
+```bash
+kubectl rollout status deployment/grafana -n monitoring
+```
+
+**Observed Result:**
+
+```text
+deployment "grafana" successfully rolled out
+```
+
+This confirms that the updated Grafana Deployment completed successfully.
+
+## 16.13 Grafana Service Verification
+
+Check the Grafana Service:
+
+```bash
+kubectl get svc -n monitoring
+```
+
+The Helm release notes provide the internal service DNS name:
+
+```text
+grafana.monitoring.svc.cluster.local
+```
+
+The service exposes port 80 and forwards requests to Grafana's application port 3000.
+
+| Configuration | Value |
+|---|---|
+| Service Name | grafana |
+| Namespace | monitoring |
+| Service Type | ClusterIP |
+| Service Port | 80 |
+| Target Port | 3000 |
+
+## 16.14 Access Grafana Through Port Forwarding
+
+Since Grafana is exposed through a ClusterIP Service, it can be accessed locally using Kubernetes port-forwarding.
+
+Execute:
+
+```bash
+kubectl port-forward -n monitoring svc/grafana 3000:80
+```
+
+Keep the terminal running.
+
+Grafana can then be accessed in the browser:
+
+```text
+http://localhost:3000
+```
+
+### Login Credentials
+
+Username:
+
+```text
+admin
+```
+
+Retrieve the generated admin password:
+
+```bash
+kubectl get secret grafana -n monitoring \
+  -o jsonpath="{.data.admin-password}" | base64 --decode; echo
+```
+
+Use the retrieved password to log in to Grafana.
+
+**Note:** Browser login and datasource integration should be marked complete only after they have been tested.
+
+## 16.15 Grafana Data Persistence and Recovery
+
+The current deployment uses one Grafana replica with one 5Gi PVC.
+
+The PVC is mounted at Grafana's data directory.
+
+The expected recovery behavior is:
+
+1. Grafana pod is running.
+2. Grafana stores its application data in the mounted PVC.
+3. The pod is deleted or recreated.
+4. Kubernetes creates a replacement pod.
+5. The replacement pod mounts the existing PVC.
+6. Existing Grafana data can be accessed again.
+
+This recovery behavior still needs to be verified through a controlled pod deletion and recreation test.
+
+**Important Storage Limitation:**
+
+The current local-path storage is tied to the node where the volume is provisioned. Pod recreation on the same node can use the existing data, but node failure recovery is not guaranteed.
+
+Persistent storage protects against normal pod/container recreation. It does not by itself provide node-level storage HA.
+
+## 16.16 Useful Verification and Troubleshooting Commands
+
+| Task | Command |
+|---|---|
+| Check Grafana pods | `kubectl get pods -n monitoring -o wide` |
+| Check Grafana Deployment | `kubectl get deployment -n monitoring` |
+| Check Grafana Service | `kubectl get svc -n monitoring` |
+| Check Grafana PVC | `kubectl get pvc -n monitoring` |
+| Check Grafana PV | `kubectl get pv` |
+| Check Grafana logs | `kubectl logs -n monitoring deployment/grafana` |
+| Describe Grafana pod | `kubectl describe pod -n monitoring -l app.kubernetes.io/name=grafana` |
+| Check Helm release | `helm list -n monitoring` |
+| Check Helm values | `helm get values grafana -n monitoring -o yaml` |
+| Check rollout status | `kubectl rollout status deployment/grafana -n monitoring` |
+| Port-forward Grafana | `kubectl port-forward -n monitoring svc/grafana 3000:80` |
+| Retrieve admin password | `kubectl get secret grafana -n monitoring -o jsonpath="{.data.admin-password}" \| base64 --decode; echo` |
+
+## 16.17 Current Grafana Architecture
+
+The current Grafana deployment architecture is:
+
+```text
+                Kind Kubernetes Cluster
+                    ha-observability
+                            |
+                            |
+                    monitoring Namespace
+                            |
+                     Grafana Service
+                        ClusterIP
+                         Port 80
+                            |
+                            v
+                     Grafana Deployment
+                       Replicas: 1
+                            |
+                            v
+                       Grafana Pod
+                            |
+                            |
+                   Persistent Volume Claim
+                        PVC: grafana
+                         Capacity: 5Gi
+                         Access: RWO
+                            |
+                            v
+                     Local-Path Storage
+                      StorageClass:
+                        standard
+```
+
+Browser access:
+
+```text
+Local Browser
+     |
+     v
+localhost:3000
+     |
+     v
+kubectl port-forward
+     |
+     v
+Grafana Service :80
+     |
+     v
+Grafana Pod :3000
+```
+
+## 16.18 Final Deployment Result
+
+| Component / Verification | Expected Result | Observed Result |
+|---|---|---|
+| Helm Release | Deployed | Deployed |
+| Chart Version | 10.5.15 | 10.5.15 |
+| Grafana App Version | 12.3.1 | 12.3.1 |
+| Grafana Replicas | 1 | 1 |
+| Grafana Pod | Running | 1/1 Running |
+| Restart Count | 0 | 0 |
+| PVC | Bound | Bound |
+| Storage Capacity | 5Gi | 5Gi |
+| StorageClass | standard | standard |
+| Service Type | ClusterIP | Configured |
+| Deployment Rollout | Successful | Successful |
+| Datasource Configuration | Not configured in current phase | Pending |
+| Pod Recovery Test | Pending | Not yet performed |
+| Multi-Replica HA | Future phase | Not implemented |
+

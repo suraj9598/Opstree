@@ -1603,3 +1603,504 @@ This page displays the scrape targets discovered by vmagent along with their hea
 
 Targets showing `UP` indicate that vmagent is successfully scraping metrics from the respective endpoints.
 
+## 12. Loki Setup
+
+### 12.1 Overview
+
+Grafana Loki is a log aggregation system used to collect, store, and query logs from Kubernetes workloads.
+
+In this POC, Loki is deployed in the `logging` namespace using the Grafana Helm chart.
+
+Loki is configured in SingleBinary mode with filesystem-based storage backed by a Kubernetes PersistentVolumeClaim (PVC).
+
+The objective of this setup is to establish the log storage layer and prepare the infrastructure for log collection through Fluent Bit and visualization through Grafana.
+
+**Current Status:**
+- Loki deployed successfully using Helm.
+- SingleBinary mode configured with one replica.
+- Filesystem storage configured.
+- A 5Gi PersistentVolumeClaim is created and Bound.
+- Loki readiness endpoint returns `ready`.
+- Loki build information API is accessible.
+- Loki Kubernetes ClusterIP Service is created.
+- MinIO is disabled in the current configuration.
+- Fluent Bit log forwarding and Grafana datasource integration are pending.
+
+### 12.2 Why We Selected This Approach
+
+#### 1. SingleBinary Mode
+
+SingleBinary mode runs Loki's required components together in a single instance.
+
+This approach was selected because the current POC runs on a local Kind cluster with limited system resources.
+
+It provides a simple deployment model and reduces the number of pods required for Loki.
+
+#### 2. One Replica
+
+Loki is configured with one replica:
+
+```yaml
+deploymentMode: SingleBinary
+
+singleBinary:
+  replicas: 1
+```
+
+One replica is sufficient for validating Loki installation, log ingestion, storage, and querying.
+
+**Important HA Limitation:** SingleBinary with one replica does not provide high availability. If the Loki pod becomes unavailable, log ingestion and querying may be interrupted until the pod recovers.
+
+#### 3. Filesystem Storage
+
+Filesystem storage was selected for this POC.
+
+Loki stores its log data on the filesystem backed by a Kubernetes PVC.
+
+This avoids the need for an external object storage system during the initial setup.
+
+#### 4. MinIO Disabled
+
+MinIO is an S3-compatible object storage system that can be used as a storage backend for Loki.
+
+During the initial setup, MinIO image pulls failed with a `401 UNAUTHORIZED` error.
+
+Since the POC uses filesystem storage, MinIO is not required.
+
+MinIO was therefore disabled to:
+- Reduce resource consumption.
+- Avoid additional pods and services.
+- Simplify storage configuration.
+- Avoid the encountered image pull issue.
+
+MinIO is not mandatory for every Loki deployment. It is one possible object storage backend.
+
+#### 5. Persistent Storage
+
+A 5Gi PVC is configured for Loki.
+
+This provides persistent storage for Loki data across pod restarts, provided the underlying volume is retained.
+
+#### 6. Helm-Based Deployment
+
+Helm was selected to manage Loki because it provides repeatable installation and configuration through a centralized `values.yaml` file.
+
+Deployment mode, replicas, storage, resources, and optional components can be maintained in a single configuration file.
+
+### 12.3 Deployment Details
+
+| Configuration | Value |
+|---|---|
+| Kubernetes Cluster | `ha-observability` |
+| Namespace | `logging` |
+| Helm Release | `loki` |
+| Helm Repository | `grafana` |
+| Helm Chart | `grafana/loki` |
+| Chart Version | `7.6.0` |
+| Loki Image Version | `3.6.11` |
+| Deployment Mode | SingleBinary |
+| Resource Type | StatefulSet |
+| Replicas | 1 |
+| Storage Backend | Filesystem |
+| Persistent Storage | 5Gi |
+| StorageClass | `standard` |
+| Loki HTTP Port | `3100` |
+| Loki gRPC Port | `9095` |
+| MinIO | Disabled |
+
+### 12.4 Helm Repository Setup
+
+Add the Grafana Helm repository:
+
+```bash
+helm repo add grafana https://grafana.github.io/helm-charts
+```
+
+Update the repository:
+
+```bash
+helm repo update grafana
+```
+
+Check available Loki chart versions:
+
+```bash
+helm search repo grafana/loki --versions
+```
+
+For this POC, chart version `7.6.0` was selected.
+
+### 12.5 Loki Configuration
+
+**Directory Path:**
+
+`~/ha-observability-poc/loki`
+
+Create the directory:
+
+```bash
+mkdir -p ~/ha-observability-poc/loki
+cd ~/ha-observability-poc/loki
+```
+
+Create the configuration file:
+
+```bash
+nano loki-values.yaml
+```
+
+**File Path:**
+
+`loki/loki-values.yaml`
+
+#### Complete Loki Values YAML
+
+```yaml
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false
+
+  commonConfig:
+    replication_factor: 1
+
+  schemaConfig:
+    configs:
+      - from: "2024-04-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: loki_index_
+          period: 24h
+
+  storage:
+    type: filesystem
+
+singleBinary:
+  replicas: 1
+
+  persistence:
+    enabled: true
+    storageClass: standard
+    size: 5Gi
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+minio:
+  enabled: false
+
+gateway:
+  enabled: false
+
+read:
+  replicas: 0
+
+write:
+  replicas: 0
+
+backend:
+  replicas: 0
+
+chunksCache:
+  enabled: false
+
+resultsCache:
+  enabled: false
+```
+
+### 12.6 Configuration Explanation
+
+| Configuration | Explanation |
+|---|---|
+| `deploymentMode: SingleBinary` | Runs Loki components together in one instance. |
+| `auth_enabled: false` | Disables multi-tenant authentication for this POC. |
+| `replication_factor: 1` | Configures one copy of data for the single-instance setup. |
+| `store: tsdb` | Uses TSDB for Loki's index storage. |
+| `object_store: filesystem` | Stores Loki data on the filesystem. |
+| `schema: v13` | Defines the Loki storage schema version. |
+| `singleBinary.replicas: 1` | Creates one Loki replica. |
+| `persistence.enabled: true` | Enables persistent storage. |
+| `storageClass: standard` | Uses the Kind `standard` StorageClass. |
+| `size: 5Gi` | Requests 5Gi storage for Loki. |
+| `resources.requests` | Defines minimum requested CPU and memory. |
+| `resources.limits` | Defines maximum CPU and memory allowed. |
+| `minio.enabled: false` | Disables MinIO object storage. |
+| `gateway.enabled: false` | Disables the gateway component for this setup. |
+| `read.replicas: 0` | Disables separate read components in SingleBinary mode. |
+| `write.replicas: 0` | Disables separate write components in SingleBinary mode. |
+| `backend.replicas: 0` | Disables separate backend components in SingleBinary mode. |
+| `chunksCache.enabled: false` | Disables the chunks cache to reduce resource usage. |
+| `resultsCache.enabled: false` | Disables the results cache to reduce resource usage. |
+
+### 12.7 Render and Validate Helm Templates
+
+Render the Helm templates before installation:
+
+```bash
+helm template loki grafana/loki \
+  --namespace logging \
+  --version 7.6.0 \
+  -f loki-values.yaml \
+  > loki-rendered.yaml
+```
+
+Verify the StatefulSet:
+
+```bash
+grep -n "kind: StatefulSet" loki-rendered.yaml
+```
+
+Verify the PersistentVolumeClaim:
+
+```bash
+grep -n "kind: PersistentVolumeClaim" loki-rendered.yaml
+```
+
+The rendered output was checked to confirm the SingleBinary StatefulSet and persistent storage configuration.
+
+### 12.8 Install Loki
+
+Install Loki using Helm:
+
+```bash
+helm install loki grafana/loki \
+  --namespace logging \
+  --create-namespace \
+  --version 7.6.0 \
+  -f loki-values.yaml
+```
+
+Check the Helm release:
+
+```bash
+helm list -n logging
+```
+
+Check the release status:
+
+```bash
+helm status loki -n logging
+```
+
+### 12.9 Verify Loki Pods
+
+Check the pods:
+
+```bash
+kubectl get pods -n logging -o wide
+```
+
+Describe the Loki pod:
+
+```bash
+kubectl describe pod loki-0 -n logging
+```
+
+Check Loki application logs:
+
+```bash
+kubectl logs loki-0 -n logging -c loki
+```
+
+The Loki pod contains:
+- Loki main container.
+- Loki rules sidecar container.
+
+The pod becomes Ready when both containers are ready.
+
+### 12.10 Verify PersistentVolumeClaim
+
+Check PVCs:
+
+```bash
+kubectl get pvc -n logging
+```
+
+**Observed Result:**
+
+| PVC | Capacity | Status | StorageClass |
+|---|---|---|---|
+| `storage-loki-0` | 5Gi | Bound | `standard` |
+
+The PVC is successfully Bound and attached to the Loki pod.
+
+### 12.11 Verify Loki Services
+
+Check the Services:
+
+```bash
+kubectl get svc -n logging
+```
+
+**Observed Services:**
+
+| Service | Type | Port | Purpose |
+|---|---|---|---|
+| `loki` | ClusterIP | 3100, 9095 | Loki API and gRPC |
+| `loki-canary` | ClusterIP | 3500 | Loki Canary |
+| `loki-headless` | Headless | 3100 | Pod discovery |
+| `loki-memberlist` | Headless | 7946 | Memberlist communication |
+
+Loki internal service URL:
+
+```text
+http://loki.logging.svc.cluster.local:3100
+```
+
+This URL can be used by applications running inside the Kubernetes cluster.
+
+### 12.12 Loki Port Forwarding
+
+Forward Loki's port to the local machine:
+
+```bash
+kubectl port-forward -n logging pod/loki-0 3100:3100
+```
+
+Keep the terminal running.
+
+Loki can now be accessed locally using:
+
+```text
+http://localhost:3100
+```
+
+### 12.13 Readiness Endpoint Verification
+
+Execute:
+
+```bash
+curl http://localhost:3100/ready
+```
+
+**Observed Response:**
+
+```text
+ready
+```
+
+Verbose verification:
+
+```bash
+curl -v http://localhost:3100/ready
+```
+
+**Observed HTTP Response:**
+
+```text
+HTTP/1.1 200 OK
+```
+
+This confirms that Loki is ready and responding through its HTTP endpoint.
+
+### 12.14 Loki Build Information Verification
+
+Execute:
+
+```bash
+curl http://localhost:3100/loki/api/v1/status/buildinfo
+```
+
+**Observed Response:**
+
+```json
+{
+  "version": "3.6.11",
+  "revision": "f7a4aa99",
+  "branch": "release-3.6.x",
+  "buildUser": "root@buildkitsandbox",
+  "buildDate": "2026-05-13T07:55:25Z",
+  "goVersion": ""
+}
+```
+
+This confirms that the Loki API is accessible and returns build information.
+
+### 12.15 Troubleshooting and Changes Made
+
+#### MinIO Image Pull Failure
+
+During the initial installation attempt, MinIO and mc image pulls failed with:
+
+```text
+401 UNAUTHORIZED
+```
+
+**Resolution:**
+
+MinIO was disabled in the Loki Helm values file:
+
+```yaml
+minio:
+  enabled: false
+```
+
+Loki was configured to use filesystem storage backed by the PVC.
+
+#### Initial Readiness Probe Failure
+
+During Loki startup, the readiness probe temporarily returned HTTP 503.
+
+The pod later became Ready.
+
+**Verification Command:**
+
+```bash
+kubectl describe pod loki-0 -n logging
+```
+
+#### Optional Internal Connectivity Test
+
+A temporary curl test pod was created to test internal service connectivity.
+
+The pod terminated with an Error status. The exact cause was not established, and this optional test was skipped.
+
+Loki readiness and build information were successfully verified using port-forwarding.
+
+### 12.16 Final Deployment Result
+
+| Component | Expected Result | Observed Result |
+|---|---|---|
+| Helm Release | Deployed | Deployed |
+| Loki Pod | Running and Ready | Ready |
+| Loki Containers | 2/2 Ready | 2/2 Ready |
+| PVC | Bound | Bound |
+| Storage Capacity | 5Gi | 5Gi |
+| Readiness Endpoint | `ready` | `ready` |
+| HTTP Readiness Status | 200 OK | 200 OK |
+| Build Info API | Accessible | Accessible |
+| MinIO | Disabled | Disabled |
+
+### 12.17 Role in the Observability Architecture
+
+Loki is the log storage component of the observability stack.
+
+The intended log flow is:
+
+```text
+Kubernetes Workloads
+        |
+        |
+Container Logs
+        |
+        |
+    Fluent Bit
+        |
+        |
+       Loki
+        |
+        |
+      Grafana
+  Log Visualization
+```
+
+Fluent Bit will collect logs from Kubernetes workloads and forward them to Loki.
+
+Grafana will use Loki as a data source to query and visualize the collected logs.

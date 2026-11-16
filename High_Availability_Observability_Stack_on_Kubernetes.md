@@ -1547,3 +1547,59 @@ However, the following limitations must be considered:
 6. **Storage is independent:** A PVC failure affects the data stored on that particular VictoriaMetrics instance.
 7. **Data consistency and duplicate handling:** These behaviors must be evaluated during further testing.
 
+## 11.19 Access vmagent Through Browser
+
+vmagent provides a web interface that can be accessed through a browser to check scrape targets and internal metrics.
+
+Since vmagent is deployed inside the Kubernetes cluster in the `metrics` namespace, we use Kubernetes port-forwarding to access it locally.
+
+### 11.19.1 Port-Forward vmagent
+
+First, check the vmagent pods:
+
+```bash
+kubectl get pods -n metrics -o wide
+```
+
+Forward the vmagent port to the local machine:
+
+```bash
+kubectl port-forward -n metrics pod/vmagent-0 8429:8429
+```
+
+Keep this terminal running while accessing vmagent through the browser.
+
+### 11.19.2 Open vmagent in Browser
+
+Open the following URLs in your browser:
+
+| URL | Description |
+|---|---|
+| http://localhost:8429 | vmagent web interface |
+| http://localhost:8429/targets | View scrape targets and their status |
+| http://localhost:8429/metrics | View internal vmagent metrics |
+
+### 11.19.3 Access Other vmagent Replicas
+
+vmagent is deployed with 3 replicas. Each replica can be accessed using a separate local port.
+
+| vmagent Pod | Port-Forward Command | Browser URL |
+|---|---|---|
+| vmagent-0 | `kubectl port-forward -n metrics pod/vmagent-0 8429:8429` | http://localhost:8429 |
+| vmagent-1 | `kubectl port-forward -n metrics pod/vmagent-1 8430:8429` | http://localhost:8430 |
+| vmagent-2 | `kubectl port-forward -n metrics pod/vmagent-2 8431:8429` | http://localhost:8431 |
+
+Run each port-forward command in a separate terminal.
+
+### 11.19.4 Verify Scrape Targets
+
+Open the following URL:
+
+```text
+http://localhost:8429/targets
+```
+
+This page displays the scrape targets discovered by vmagent along with their health status.
+
+Targets showing `UP` indicate that vmagent is successfully scraping metrics from the respective endpoints.
+

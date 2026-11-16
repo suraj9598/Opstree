@@ -680,3 +680,343 @@ The `kube_node_info` metric returned information for all three Kind cluster node
 
 Kube-state-metrics exposes Kubernetes object-state metrics. vmagent will scrape these metrics and send them to VictoriaMetrics for storage and querying through Grafana.
 
+## 10. VictoriaMetrics Setup
+
+### 10.1 Overview
+
+VictoriaMetrics is a time-series database used to store and query metrics collected from Kubernetes nodes and workloads.
+
+In this POC, VictoriaMetrics Single is deployed with three replicas across the three nodes of the Kind Kubernetes cluster.
+
+Each replica runs independently and has its own PersistentVolumeClaim (PVC). Pod Anti-Affinity is configured to distribute the replicas across different Kubernetes nodes.
+
+The objective of this setup is to establish the metrics storage layer and prepare the infrastructure for evaluating High Availability (HA) scenarios.
+
+**Current Status:**
+- Three VictoriaMetrics replicas deployed successfully.
+- All replicas are running on separate Kubernetes nodes.
+- Three separate 5Gi PVCs are created and Bound.
+- VictoriaMetrics Service discovers all three pod endpoints.
+- VictoriaMetrics VMUI is accessible through the browser.
+- vmagent scraping and remote-write configuration is pending.
+- Metrics fan-out and failover testing are pending.
+
+### 10.2 Why We Selected This Approach
+
+#### 1. VictoriaMetrics Single
+
+VictoriaMetrics Single was selected for this initial POC because it provides a lightweight and relatively simple deployment model.
+
+It allows us to focus on Kubernetes scheduling, persistent storage, and independent replica behavior without introducing the additional complexity of a native VictoriaMetrics Cluster deployment.
+
+#### 2. Three Replicas Across Three Nodes
+
+We deployed three independent VictoriaMetrics Single instances across the control-plane node and two worker nodes.
+
+This distribution allows us to evaluate pod and node failure scenarios and observe the availability of the remaining instances.
+
+#### 3. Pod Anti-Affinity
+
+Required Pod Anti-Affinity is configured to prevent matching VictoriaMetrics pods from running on the same Kubernetes node.
+
+This ensures that each replica is distributed across a separate node.
+
+#### 4. Separate Persistent Storage
+
+Each VictoriaMetrics replica has its own 5Gi PersistentVolumeClaim.
+
+This provides independent storage for each instance and avoids sharing the same volume between replicas.
+
+#### 5. Helm-Based Deployment
+
+Helm was selected to manage the deployment because it provides repeatable installation and centralized configuration through `values.yaml`.
+
+Replica count, storage, resources, retention period, and scheduling rules can be maintained in a single configuration file.
+
+#### 6. Kind for Local POC
+
+Kind provides a local multi-node Kubernetes environment. It allows us to test the deployment and scheduling behavior without provisioning a separate production Kubernetes infrastructure.
+
+**Important HA Limitation:** The three VictoriaMetrics Single instances do not automatically replicate data between themselves. The headless Service discovers the pod endpoints but does not distribute or replicate metrics data. vmagent remote-write fan-out and query failover must be configured and tested separately.
+
+### 10.3 Deployment Details
+
+| Configuration | Value |
+|---|---|
+| Kubernetes Cluster | `ha-observability` |
+| Namespace | `metrics` |
+| Helm Release | `vm-single` |
+| Helm Chart | `vm/victoria-metrics-single` |
+| Chart Version | `0.51.0` |
+| VictoriaMetrics Version | `v1.156.0` |
+| Deployment Type | StatefulSet |
+| Replicas | 3 |
+| Retention Period | 1 day |
+| Storage per Replica | 5Gi |
+| StorageClass | `standard` |
+| HTTP Port | `8428` |
+
+### 10.4 Helm Repository Setup
+
+Add the VictoriaMetrics Helm repository:
+
+```bash
+helm repo add vm https://victoriametrics.github.io/helm-charts/
+```
+
+Update the Helm repository:
+
+```bash
+helm repo update
+```
+
+Check available chart versions:
+
+```bash
+helm search repo vm/victoria-metrics-single --versions
+```
+
+Create the metrics namespace:
+
+```bash
+kubectl create namespace metrics \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+### 10.5 VictoriaMetrics Configuration
+
+**File Path:**
+
+`~/ha-observability-poc/victoria-metrics/values.yaml`
+
+```yaml
+server:
+  enabled: true
+  replicaCount: 3
+
+  retentionPeriod: "1"
+
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        - labelSelector:
+            matchLabels:
+              app: server
+              app.kubernetes.io/instance: vm-single
+              app.kubernetes.io/name: victoria-metrics-single
+          topologyKey: kubernetes.io/hostname
+
+  persistentVolume:
+    enabled: true
+    accessModes:
+      - ReadWriteOnce
+    storageClassName: standard
+    size: 5Gi
+    mountPath: /victoria-metrics-data
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+```
+
+### 10.6 Configuration Explanation
+
+| Configuration | Explanation |
+|---|---|
+| `replicaCount: 3` | Creates three VictoriaMetrics Single replicas. |
+| `retentionPeriod: "1"` | Configures one-day data retention. |
+| `tolerations` | Allows a VictoriaMetrics pod to be scheduled on the control-plane node. |
+| `podAntiAffinity` | Prevents matching pods from being scheduled on the same node. |
+| `topologyKey: kubernetes.io/hostname` | Uses the node hostname as the scheduling separation boundary. |
+| `persistentVolume.enabled: true` | Enables persistent storage for each replica. |
+| `size: 5Gi` | Requests 5Gi storage for each replica. |
+| `storageClassName: standard` | Uses the Kind `standard` StorageClass. |
+| `resources.requests` | Defines the minimum CPU and memory requested by each pod. |
+| `resources.limits` | Defines the maximum CPU and memory allowed for each pod. |
+
+### 10.7 Render and Validate Helm Templates
+
+Export the default Helm values:
+
+```bash
+helm show values vm/victoria-metrics-single \
+  --version 0.51.0 > chart-default-values.yaml
+```
+
+Render the Helm templates:
+
+```bash
+helm template vm-single vm/victoria-metrics-single \
+  --version 0.51.0 \
+  --namespace metrics \
+  --values values.yaml > vm-rendered.yaml
+```
+
+Verify the StatefulSet:
+
+```bash
+grep -n -A 45 'kind: StatefulSet' vm-rendered.yaml
+```
+
+Verify Anti-Affinity:
+
+```bash
+grep -n -A 35 'affinity:' vm-rendered.yaml
+```
+
+Verify PVC configuration:
+
+```bash
+grep -n -A 20 'volumeClaimTemplates:' vm-rendered.yaml
+```
+
+Verify tolerations:
+
+```bash
+grep -n -A 15 'tolerations:' vm-rendered.yaml
+```
+
+The rendered manifest was verified to contain three replicas, required Pod Anti-Affinity, control-plane toleration, and a 5Gi PVC template.
+
+### 10.8 Install VictoriaMetrics
+
+Install VictoriaMetrics using Helm:
+
+```bash
+helm upgrade --install vm-single vm/victoria-metrics-single \
+  --version 0.51.0 \
+  --namespace metrics \
+  --values values.yaml
+```
+
+### 10.9 Verify VictoriaMetrics Pods
+
+Check the pods and their node placement:
+
+```bash
+kubectl get pods -n metrics -o wide
+```
+
+**Observed Deployment Result:**
+
+| Pod | Kubernetes Node | Status |
+|---|---|---|
+| `vm-single-victoria-metrics-single-server-0` | `ha-observability-worker2` | 1/1 Running |
+| `vm-single-victoria-metrics-single-server-1` | `ha-observability-worker` | 1/1 Running |
+| `vm-single-victoria-metrics-single-server-2` | `ha-observability-control-plane` | 1/1 Running |
+
+All three VictoriaMetrics pods are running on separate Kubernetes nodes.
+
+### 10.10 Verify PersistentVolumeClaims
+
+Check PVCs:
+
+```bash
+kubectl get pvc -n metrics
+```
+
+**Observed Result:**
+
+| PVC | Capacity | Status |
+|---|---|---|
+| `server-volume-vm-single-victoria-metrics-single-server-0` | 5Gi | Bound |
+| `server-volume-vm-single-victoria-metrics-single-server-1` | 5Gi | Bound |
+| `server-volume-vm-single-victoria-metrics-single-server-2` | 5Gi | Bound |
+
+Each VictoriaMetrics replica has its own persistent storage.
+
+### 10.11 Verify Service and Endpoints
+
+Check the Service:
+
+```bash
+kubectl get svc -n metrics
+```
+<img width="1020" height="92" alt="image" src="https://github.com/user-attachments/assets/4e6fc637-e323-4b96-817a-35c2560f88d0" />
+
+Check the Endpoints:
+
+```bash
+kubectl get endpoints -n metrics
+```
+<img width="1078" height="106" alt="image" src="https://github.com/user-attachments/assets/daf2eed2-450b-47f6-af14-4ad4e609bc64" />
+
+**Observed Service Details:**
+
+| Configuration | Value |
+|---|---|
+| Service Name | `vm-single-victoria-metrics-single-server` |
+| Service Type | Headless ClusterIP |
+| Cluster IP | `None` |
+| Port | `8428` |
+| Endpoints | 3 |
+
+The headless Service discovers all three VictoriaMetrics pod endpoints on port `8428`.
+
+This confirms endpoint discovery and does not indicate automatic data replication.
+
+### 10.12 Access VictoriaMetrics UI in Browser
+
+VictoriaMetrics VMUI can be accessed through Kubernetes port-forwarding.
+
+Start port-forwarding:
+
+```bash
+kubectl port-forward -n metrics \
+  svc/vm-single-victoria-metrics-single-server 8428:8428
+```
+
+Keep the terminal running.
+
+Open the following URL in the browser:
+
+```text
+http://localhost:8428/vmui/
+```
+<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/59a79357-43e8-44b1-9cbd-dfc463880d36" />
+
+The VictoriaMetrics VMUI was successfully opened in the browser.
+
+### 10.13 Query Verification
+
+In the VMUI query section, execute the following query:
+
+```promql
+up
+```
+
+This query can be used to check the availability of scraped targets once metrics collection is configured.
+
+At the current stage, the expected metrics may not be available because vmagent scraping and remote-write configuration are still pending.
+
+### 10.14 Current Architecture
+
+```text
+                 Kind Kubernetes Cluster
+                    ha-observability
+                           |
+          +----------------+----------------+
+          |                |                |
+    Control Plane      Worker Node 1    Worker Node 2
+          |                |                |
+  VictoriaMetrics    VictoriaMetrics   VictoriaMetrics
+    Replica 2          Replica 1         Replica 0
+          |                |                |
+       PVC 5Gi           PVC 5Gi          PVC 5Gi
+          |                |                |
+          +----------------+----------------+
+                           |
+                Headless Service :8428
+                           |
+                         VMUI
+```
+

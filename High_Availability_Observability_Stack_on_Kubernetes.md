@@ -2104,3 +2104,990 @@ Container Logs
 Fluent Bit will collect logs from Kubernetes workloads and forward them to Loki.
 
 Grafana will use Loki as a data source to query and visualize the collected logs.
+
+# 13. Fluent Bit Setup
+
+## 13.1 Overview
+
+Fluent Bit is a lightweight log processor and forwarder used to collect logs from Kubernetes workloads and forward them to a centralized log storage system.
+
+In this POC, Fluent Bit is deployed as a DaemonSet in the `logging` namespace of the `ha-observability` Kind Kubernetes cluster.
+
+Fluent Bit collects container logs from Kubernetes nodes, enriches them with Kubernetes metadata, and forwards them to Loki using the Loki output plugin.
+
+The objective of this setup is to establish the complete Kubernetes log collection and forwarding pipeline.
+
+**Log Flow:**
+
+`Kubernetes Container Logs → Fluent Bit → Loki → LogQL Queries`
+
+### Current Status
+
+- Fluent Bit deployed successfully using Helm.
+- Fluent Bit deployed as a DaemonSet.
+- Three Fluent Bit pods running across all three Kubernetes nodes.
+- Control-plane toleration configured.
+- Container logs collected from `/var/log/containers/`.
+- Kubernetes metadata attached to log records.
+- Loki output configured using the Loki service DNS name.
+- Initial DNS resolution issue investigated and addressed through a hostname configuration change.
+- Fluent Bit logs successfully forwarded to Loki.
+- Kubernetes container logs verified through the Loki Query API.
+- Fluent Bit's own container logs also verified in Loki.
+- LogQL-compatible query execution through Loki API verified.
+
+## 13.2 Why Fluent Bit Was Required
+
+Loki is responsible for storing and querying logs, but it does not independently collect container log files from every Kubernetes node.
+
+A log collection agent is required to read logs from the nodes and forward them to Loki.
+
+Fluent Bit was selected for the following reasons:
+
+### 1. Lightweight Log Collector
+
+Fluent Bit is designed to collect and forward logs with relatively low resource consumption.
+
+It is suitable for Kubernetes environments where a log collector needs to run on every node.
+
+### 2. DaemonSet Deployment
+
+Fluent Bit is deployed as a DaemonSet.
+
+A DaemonSet ensures that one Fluent Bit pod runs on every eligible Kubernetes node.
+
+In this POC, the cluster contains:
+
+- One control-plane node.
+- Two worker nodes.
+
+Therefore, three Fluent Bit pods are deployed.
+
+### 3. Kubernetes Metadata Enrichment
+
+Fluent Bit uses the Kubernetes filter to enrich collected logs with metadata.
+
+Examples include:
+
+- Namespace name.
+- Pod name.
+- Container name.
+
+This metadata helps identify which Kubernetes workload generated a particular log.
+
+### 4. Loki Integration
+
+Fluent Bit supports a Loki output plugin.
+
+This plugin allows Fluent Bit to forward collected log records directly to Loki over HTTP.
+
+### 5. Helm-Based Deployment
+
+Helm is used to install and manage Fluent Bit.
+
+This makes the deployment repeatable and allows configuration changes through a centralized values file.
+
+## 13.3 Deployment Details
+
+| Configuration | Value |
+|---|---|
+| Kubernetes Cluster | `ha-observability` |
+| Namespace | `logging` |
+| Component | Fluent Bit |
+| Helm Release | `fluent-bit` |
+| Helm Repository | `fluent` |
+| Helm Chart | `fluent/fluent-bit` |
+| Chart Version | `0.58.3` |
+| Fluent Bit Application Version | `5.1.3` |
+| Deployment Type | DaemonSet |
+| Replicas / Pods | 3 |
+| Input Plugin | Tail |
+| Log Path | `/var/log/containers/*.log` |
+| Filter | Kubernetes |
+| Output Plugin | Loki |
+| Loki Service | `loki.logging.svc.cluster.local.` |
+| Loki Port | `3100` |
+| Output Match | `kube.*` |
+
+## 13.4 Fluent Bit Architecture
+
+The following architecture represents the complete log collection and forwarding flow.
+
+```text
+                   Kind Kubernetes Cluster
+                      ha-observability
+                              |
+              +---------------+---------------+
+              |               |               |
+              |               |               |
+        Control Plane      Worker Node 1    Worker Node 2
+              |               |               |
+         Container Logs  Container Logs  Container Logs
+              |               |               |
+              v               v               v
+         Fluent Bit      Fluent Bit      Fluent Bit
+           Pod              Pod              Pod
+              |               |               |
+              +---------------+---------------+
+                              |
+                       Kubernetes Filter
+                              |
+                    Metadata Enrichment
+                              |
+                         Loki Output
+                              |
+                              v
+                    Loki Service :3100
+                              |
+                              v
+                       Loki Storage
+                              |
+                              v
+                     Loki Query API
+                              |
+                              v
+                         Grafana
+```
+
+### Architecture Flow Explanation
+
+1. Kubernetes workloads generate container logs.
+2. Container logs are written to the node's `/var/log/containers/` directory.
+3. Fluent Bit runs as a DaemonSet on every eligible node.
+4. The Tail input plugin reads container log files.
+5. The Kubernetes filter extracts and attaches Kubernetes metadata.
+6. The Loki output plugin forwards matching log records to Loki.
+7. Loki receives and stores the log streams.
+8. Users can query the collected logs using LogQL through Loki's API or Grafana.
+
+## 13.5 Directory Structure
+
+The Fluent Bit configuration is maintained separately inside the project directory.
+
+```text
+ha-observability-poc/
+│
+├── kind/
+│   └── kind-config.yaml
+│
+├── node-exporter/
+│   └── node-exporter.yaml
+│
+├── kube-state-metrics/
+│   └── kube-state-metrics.yaml
+│
+├── victoria-metrics/
+│   └── values.yaml
+│
+├── vmagent/
+│   └── vmagent-default-values.yaml
+│
+├── loki/
+│   └── loki-values.yaml
+│
+├── fluent-bit/
+│   └── fluent-bit-values.yaml
+│
+└── README.md
+```
+
+## 13.6 Helm Repository Setup
+
+Fluent Bit is installed using the official Fluent Bit Helm chart.
+
+Add the Helm repository:
+
+```bash
+helm repo add fluent https://fluent.github.io/helm-charts
+```
+
+Update the Helm repository:
+
+```bash
+helm repo update
+```
+
+Verify the repository:
+
+```bash
+helm repo list
+```
+
+Check available Fluent Bit chart versions:
+
+```bash
+helm search repo fluent/fluent-bit --versions
+```
+
+For this POC, chart version `0.58.3` was selected.
+
+## 13.7 Fluent Bit Configuration
+
+### Configuration File
+
+**File Path:**
+
+`~/ha-observability-poc/fluent-bit/fluent-bit-values.yaml`
+
+Create the directory:
+
+```bash
+mkdir -p ~/ha-observability-poc/fluent-bit
+cd ~/ha-observability-poc/fluent-bit
+```
+
+Create the values file:
+
+```bash
+nano fluent-bit-values.yaml
+```
+
+### Configuration Used in the POC
+
+```yaml
+kind: DaemonSet
+
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+
+config:
+  outputs: |
+    [OUTPUT]
+        Name                  loki
+        Match                 kube.*
+        Host                  loki.logging.svc.cluster.local.
+        Port                  3100
+        Labels                job=fluent-bit
+        Label_Keys            $kubernetes['namespace_name'],$kubernetes['pod_name'],$kubernetes['container_name']
+        Auto_Kubernetes_Labels Off
+        Retry_Limit           False
+```
+
+**Important:** The above is the custom values configuration used for this POC. The Fluent Bit Helm chart also supplies its default input and filter configuration.
+
+## 13.8 Configuration Explanation
+
+### 1. DaemonSet
+
+```yaml
+kind: DaemonSet
+```
+
+Fluent Bit is deployed as a DaemonSet.
+
+This ensures that one Fluent Bit pod runs on each eligible Kubernetes node.
+
+Since the Kind cluster has three nodes, the expected Fluent Bit pod count is three.
+
+### 2. Control-Plane Toleration
+
+```yaml
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+```
+
+The control-plane node has a `NoSchedule` taint.
+
+Without the required toleration, Fluent Bit would not be scheduled on that node.
+
+The toleration allows Fluent Bit to run on the control-plane node as well as the worker nodes.
+
+### 3. Loki Output Plugin
+
+```ini
+[OUTPUT]
+    Name loki
+```
+
+The `loki` output plugin is used to forward collected log records to Loki.
+
+### 4. Match
+
+```ini
+Match kube.*
+```
+
+The Match parameter determines which Fluent Bit records are sent to this output.
+
+The configured output matches records with tags beginning with `kube.`.
+
+The Tail input uses the Kubernetes log tag pattern, allowing matching Kubernetes container logs to be forwarded to Loki.
+
+### 5. Loki Host
+
+```ini
+Host loki.logging.svc.cluster.local.
+```
+
+This is the internal Kubernetes DNS name of the Loki service.
+
+Breaking down the hostname:
+
+| Part | Meaning |
+|---|---|
+| `loki` | Loki Service name |
+| `logging` | Kubernetes namespace |
+| `svc` | Kubernetes Service DNS domain |
+| `cluster.local` | Kubernetes cluster DNS domain |
+| Final `.` | Marks the hostname as an absolute DNS name |
+
+The trailing dot is intentional. It was added during DNS troubleshooting to avoid the observed DNS search-domain expansion behavior.
+
+### 6. Loki Port
+
+```ini
+Port 3100
+```
+
+Loki exposes its HTTP API on port `3100`.
+
+Fluent Bit sends logs to this port.
+
+### 7. Labels
+
+```ini
+Labels job=fluent-bit
+```
+
+This adds a static Loki label:
+
+`job="fluent-bit"`
+
+It helps identify log streams forwarded by this Fluent Bit output.
+
+### 8. Label_Keys
+
+```ini
+Label_Keys $kubernetes['namespace_name'],$kubernetes['pod_name'],$kubernetes['container_name']
+```
+
+This configuration extracts Kubernetes metadata fields and uses them as Loki labels.
+
+The labels include:
+
+- `kubernetes_namespace_name`
+- `kubernetes_pod_name`
+- `kubernetes_container_name`
+
+These labels make it easier to filter logs by namespace, pod, and container.
+
+### 9. Auto_Kubernetes_Labels
+
+```ini
+Auto_Kubernetes_Labels Off
+```
+
+Automatic conversion of all Kubernetes metadata labels into Loki labels is disabled.
+
+Only the explicitly configured label keys are selected.
+
+This keeps the label selection controlled instead of automatically adding every Kubernetes label.
+
+### 10. Retry_Limit
+
+```ini
+Retry_Limit False
+```
+
+This configures unlimited retries for failed output delivery.
+
+It allows Fluent Bit to continue retrying when Loki is temporarily unavailable, subject to Fluent Bit's buffering and retry behavior.
+
+## 13.9 Input and Filter Configuration
+
+The Fluent Bit chart provides the default input and filter configuration used in this POC.
+
+### Tail Input
+
+The Tail input plugin reads Kubernetes container log files.
+
+The relevant configuration is:
+
+```ini
+[INPUT]
+    Name tail
+    Path /var/log/containers/*.log
+    Tag kube.*
+    Multiline.Parser docker, cri
+    Mem_Buf_Limit 5MB
+    Skip_Long_Lines On
+```
+
+**Explanation:**
+
+| Parameter | Purpose |
+|---|---|
+| `Name tail` | Uses the Tail input plugin. |
+| `Path` | Reads container log files from the node. |
+| `Tag kube.*` | Assigns Kubernetes-related tags to collected records. |
+| `Multiline.Parser` | Supports Docker and CRI multiline log parsing. |
+| `Mem_Buf_Limit` | Sets the configured memory buffer limit for the input. |
+| `Skip_Long_Lines` | Skips log lines exceeding the supported buffer conditions rather than stopping collection. |
+
+### Kubernetes Filter
+
+The Kubernetes filter enriches log records with Kubernetes metadata.
+
+The chart's default configuration includes settings such as:
+
+```ini
+[FILTER]
+    Name kubernetes
+    Match kube.*
+    Merge_Log On
+    Keep_Log Off
+```
+
+**Explanation:**
+
+| Parameter | Purpose |
+|---|---|
+| `Name kubernetes` | Enables Kubernetes metadata enrichment. |
+| `Match kube.*` | Applies the filter to Kubernetes log records. |
+| `Merge_Log On` | Attempts to merge structured JSON log content into the log record. |
+| `Keep_Log Off` | Removes the original log field after successful merging according to the filter behavior. |
+
+The Kubernetes filter helps attach useful metadata to log records before they are forwarded to Loki.
+
+## 13.10 Deploy Fluent Bit
+
+### Step 1: Validate Helm Configuration
+
+Before installation, render the Helm templates:
+
+```bash
+helm template fluent-bit fluent/fluent-bit \
+  --namespace logging \
+  --version 0.58.3 \
+  -f fluent-bit-values.yaml \
+  > fluent-bit-rendered.yaml
+```
+
+This helps verify the generated Kubernetes resources before deployment.
+
+### Step 2: Install Fluent Bit
+
+```bash
+helm install fluent-bit fluent/fluent-bit \
+  --namespace logging \
+  --version 0.58.3 \
+  -f fluent-bit-values.yaml
+```
+
+If Fluent Bit is already installed and the configuration needs to be updated, use:
+
+```bash
+helm upgrade fluent-bit fluent/fluent-bit \
+  --namespace logging \
+  --version 0.58.3 \
+  -f fluent-bit-values.yaml
+```
+
+### Step 3: Verify Helm Release
+
+```bash
+helm list -n logging
+```
+
+Check the release status:
+
+```bash
+helm status fluent-bit -n logging
+```
+
+## 13.11 Verify Fluent Bit Deployment
+
+### Check DaemonSet
+
+```bash
+kubectl get daemonset -n logging
+```
+
+The DaemonSet should show three desired, current, and ready pods.
+
+### Check Fluent Bit Pods
+
+```bash
+kubectl get pods -n logging \
+  -l app.kubernetes.io/name=fluent-bit \
+  -o wide
+```
+
+**Observed Deployment Result:**
+
+| Node | Fluent Bit Pod Status |
+|---|---|
+| `ha-observability-control-plane` | Running |
+| `ha-observability-worker` | Running |
+| `ha-observability-worker2` | Running |
+
+All three Fluent Bit pods were observed in `1/1 Running` state.
+
+### Check Fluent Bit Logs
+
+```bash
+kubectl logs -n logging \
+  -l app.kubernetes.io/name=fluent-bit \
+  --prefix
+```
+
+This command displays the logs from all Fluent Bit pods.
+
+It can be used to inspect startup messages, input activity, and output delivery errors.
+
+### Check Helm Values
+
+```bash
+helm get values fluent-bit -n logging -o yaml
+```
+
+This command displays the custom values applied to the Helm release.
+
+## 13.12 Troubleshooting Performed During Fluent Bit Setup
+
+During the initial deployment, Fluent Bit pods were running, but logs were not being forwarded successfully to Loki.
+
+The main issue observed during troubleshooting was DNS resolution failure from Fluent Bit.
+
+### Issue 1: Loki DNS Resolution Failure
+
+**Observed Error:**
+
+```text
+getaddrinfo(host='loki.logging.svc.cluster.local', err=11):
+Could not contact DNS servers
+
+no upstream connections available
+```
+
+This indicated that Fluent Bit was unable to resolve the Loki service hostname during the affected attempts.
+
+As a result, Fluent Bit could not establish the required connection to Loki.
+
+#### Step 1: Verify Loki Service
+
+The Loki service was checked first:
+
+```bash
+kubectl get svc -n logging
+```
+
+The Loki service was available as a ClusterIP service on port `3100`.
+
+The service name was:
+
+```text
+loki
+```
+
+The expected internal DNS name was:
+
+```text
+loki.logging.svc.cluster.local
+```
+
+#### Step 2: Check CoreDNS Pods
+
+CoreDNS pods were checked to verify that the cluster DNS component was running:
+
+```bash
+kubectl get pods -n kube-system
+```
+
+The CoreDNS pods were in Running state.
+
+#### Step 3: Check CoreDNS Service and Endpoints
+
+The DNS service was inspected:
+
+```bash
+kubectl get svc -n kube-system kube-dns
+```
+
+The service was available with the ClusterIP:
+
+```text
+10.96.0.10
+```
+
+The DNS endpoints were also checked:
+
+```bash
+kubectl get endpoints -n kube-system kube-dns
+```
+
+This confirmed that CoreDNS endpoints were available.
+
+#### Step 4: Inspect CoreDNS Logs
+
+CoreDNS logs were checked:
+
+```bash
+kubectl logs -n kube-system \
+  -l k8s-app=kube-dns \
+  --prefix
+```
+
+During the investigation, upstream DNS timeout messages were observed.
+
+An example of the upstream DNS server involved was:
+
+```text
+172.19.0.1:53
+```
+
+Queries were also observed with additional search-domain suffixes, such as:
+
+```text
+loki.logging.svc.cluster.local.netbird.selfhosted.
+```
+
+This indicated that DNS search-domain expansion was part of the observed DNS behavior.
+
+#### Step 5: Inspect Pod DNS Configuration
+
+A temporary DNS test pod was used to inspect the resolver configuration.
+
+The resolver file contained:
+
+```text
+search logging.svc.cluster.local svc.cluster.local cluster.local netbird.selfhosted tail5caa65.ts.net
+
+nameserver 10.96.0.10
+
+options ndots:5
+```
+
+**Explanation:**
+
+| Configuration | Purpose |
+|---|---|
+| `search` | Defines DNS suffixes used during hostname resolution. |
+| `nameserver` | Specifies the DNS server used by the pod. |
+| `ndots:5` | Controls when a name is treated as fully qualified versus being tried with search suffixes. |
+
+The DNS configuration helped investigate why hostname resolution was behaving differently than expected.
+
+### Issue 2: Verify DNS Resolution from Different Nodes
+
+Temporary DNS test pods were created on different worker nodes.
+
+The purpose was to determine whether Loki service DNS resolution worked from the Kubernetes node network.
+
+DNS resolution was tested from:
+
+- Worker node 1.
+- Worker node 2.
+
+The Loki service name resolved successfully from these test pods.
+
+This helped establish that DNS resolution was possible from other pods in the cluster.
+
+### Issue 3: Verify DNS from Fluent Bit Pod Network
+
+Since DNS resolution worked from the temporary test pods, the next step was to test DNS from the Fluent Bit pod's network namespace.
+
+An ephemeral debug container was added to a Fluent Bit pod using Kubernetes debug functionality.
+
+The debug container was used to test DNS resolution and HTTP connectivity without modifying the Fluent Bit application configuration.
+
+DNS resolution of the Loki service was successful from the debug container.
+
+### Issue 4: Verify Loki HTTP Connectivity
+
+After DNS resolution, Loki's HTTP readiness endpoint was tested from the Fluent Bit pod's network namespace.
+
+The following command was executed inside the debug container:
+
+```bash
+wget -qO- http://loki.logging.svc.cluster.local:3100/ready
+```
+
+**Observed Response:**
+
+```text
+ready
+```
+
+This confirmed that the Loki service was reachable over HTTP from the tested network namespace.
+
+### Issue 5: Apply Absolute DNS Hostname
+
+After investigating the DNS behavior, the Loki hostname in the Fluent Bit output configuration was updated.
+
+**Previous Configuration:**
+
+```ini
+Host loki.logging.svc.cluster.local
+```
+
+**Updated Configuration:**
+
+```ini
+Host loki.logging.svc.cluster.local.
+```
+
+The trailing dot makes the hostname an absolute DNS name.
+
+This was done to avoid the observed DNS search-domain expansion behavior.
+
+### Step 6: Upgrade Fluent Bit
+
+After updating the configuration, Fluent Bit was upgraded:
+
+```bash
+helm upgrade fluent-bit fluent/fluent-bit \
+  --namespace logging \
+  --version 0.58.3 \
+  -f fluent-bit-values.yaml
+```
+
+### Step 7: Verify Fluent Bit Logs Again
+
+The following command was used to check recent DNS and output errors:
+
+```bash
+kubectl logs -n logging \
+  -l app.kubernetes.io/name=fluent-bit \
+  --since=2m --prefix |
+  grep -E 'getaddrinfo|upstream|error|failed to flush'
+```
+
+**Observed Result:**
+
+No matching output was returned during the verification period.
+
+This indicated that the previously observed DNS and output errors were no longer appearing in the checked recent Fluent Bit logs.
+
+**Troubleshooting Conclusion:**
+
+- Loki service was available.
+- CoreDNS pods and endpoints were available.
+- DNS resolution was tested from different worker nodes.
+- DNS resolution from the Fluent Bit pod's network namespace was successful during the debug test.
+- Loki readiness endpoint was reachable over HTTP.
+- The Loki hostname was updated to use an absolute DNS name with a trailing dot.
+- After the Helm upgrade, the recent Fluent Bit logs no longer showed the matching DNS/output errors.
+- Successful log ingestion was subsequently verified through the Loki API.
+
+**Note:** The trailing-dot change correlated with successful operation. The exact underlying cause of the initial DNS failure was not conclusively established.
+
+## 13.13 Verify Log Ingestion in Loki
+
+After resolving the observed forwarding issue, log ingestion was verified directly through Loki's HTTP API.
+
+### Step 1: Port-Forward Loki
+
+Execute:
+
+```bash
+kubectl port-forward -n logging svc/loki 3100:3100
+```
+
+Keep this terminal running.
+
+Loki can now be accessed locally at:
+
+```text
+http://localhost:3100
+```
+
+### Step 2: Query Kubernetes Container Logs
+
+Execute the following query from another terminal:
+
+```bash
+curl -G -s "http://localhost:3100/loki/api/v1/query_range" \
+  --data-urlencode 'query={job="fluent-bit"}' \
+  --data-urlencode 'limit=5' \
+  --data-urlencode "start=$(date -u -d '5 minutes ago' +%s)000000000" \
+  --data-urlencode "end=$(date -u +%s)000000000"
+```
+
+**Query Explanation:**
+
+| Parameter | Purpose |
+|---|---|
+| `/loki/api/v1/query_range` | Loki endpoint for querying logs over a time range. |
+| `job="fluent-bit"` | Filters streams having the configured Fluent Bit job label. |
+| `limit=5` | Limits the returned log entries. |
+| `start` | Defines the beginning of the query time range. |
+| `end` | Defines the end of the query time range. |
+
+**Observed Result:**
+
+Loki returned:
+
+```json
+{
+  "status": "success",
+  "data": {
+    "resultType": "streams",
+    "result": []
+  }
+}
+```
+
+The actual response contained log streams and entries from Kubernetes containers.
+
+Examples of observed sources included:
+
+- kindnet-cni.
+- kube-state-metrics.
+
+The returned log streams contained Kubernetes metadata labels.
+
+### Verified Labels
+
+```text
+job=fluent-bit
+kubernetes_container_name
+kubernetes_namespace_name
+kubernetes_pod_name
+```
+
+This confirmed that Kubernetes container logs were successfully reaching Loki with the expected metadata.
+
+## 13.14 Verify Fluent Bit's Own Logs in Loki
+
+Apart from Kubernetes workload logs, Fluent Bit's own container logs were also checked in Loki.
+
+This verification helped confirm that Fluent Bit was collecting and forwarding its own container logs as well.
+
+Execute:
+
+```bash
+curl -G -s "http://localhost:3100/loki/api/v1/query_range" \
+  --data-urlencode 'query={job="fluent-bit",kubernetes_container_name="fluent-bit"}' \
+  --data-urlencode 'limit=5' \
+  --data-urlencode "start=$(date -u -d '10 minutes ago' +%s)000000000" \
+  --data-urlencode "end=$(date -u +%s)000000000"
+```
+
+### Observed Result
+
+Loki returned successful query results containing Fluent Bit container log entries.
+
+An example of an observed log message was:
+
+```text
+[input:tail:tail.0] inotify_fs_add()
+```
+
+The returned stream included:
+
+```text
+kubernetes_container_name=fluent-bit
+kubernetes_namespace_name=logging
+kubernetes_pod_name=fluent-bit-...
+```
+
+This verified that Fluent Bit's own container logs were also available in Loki.
+
+## 13.15 Important Query Note
+
+During verification, the following endpoint was initially tried:
+
+```text
+/loki/api/v1/query
+```
+
+The API returned an error indicating that log queries are not supported as an instant query type.
+
+For log retrieval over a time range, the correct endpoint used in this POC was:
+
+```text
+/loki/api/v1/query_range
+```
+
+This endpoint accepts a start and end timestamp and returns log streams within the requested time range.
+
+## 13.16 Final Deployment Result
+
+| Component / Verification | Expected Result | Observed Result |
+|---|---|---|
+| Helm Release | Deployed | Deployed |
+| Fluent Bit DaemonSet | 3/3 Ready | 3/3 Ready |
+| Fluent Bit Pods | 3 Running | 3 Running |
+| Control-Plane Scheduling | Allowed | Successful |
+| Worker Node 1 Scheduling | Allowed | Successful |
+| Worker Node 2 Scheduling | Allowed | Successful |
+| Loki Service | Accessible | Accessible |
+| DNS Troubleshooting | No recurring matching errors in recent logs | Verified |
+| Loki Readiness Test | `ready` | `ready` |
+| Kubernetes Log Ingestion | Successful | Verified |
+| Fluent Bit Self-Log Ingestion | Successful | Verified |
+| Kubernetes Metadata | Attached | Verified |
+| Loki Query API | Successful | Verified |
+
+## 13.17 Current Log Collection Scope and Limitations
+
+The current POC focuses on Kubernetes container logs.
+
+The following points define the current implementation scope:
+
+1. Fluent Bit reads container logs from `/var/log/containers/*.log`.
+2. Kubernetes metadata is attached through the Kubernetes filter.
+3. The configured Loki output matches `kube.*` records.
+4. Systemd input configuration may exist in the chart defaults, but the current setup does not mount `/run/log/journal` for systemd journal collection.
+5. The Loki output matches `kube.*`, so systemd records tagged `host.*` are not forwarded through this output.
+6. Log ingestion and querying have been verified, but production-scale throughput, resource utilization, buffering behavior, and long-term retention have not yet been benchmarked.
+7. The current Loki deployment uses SingleBinary with one replica, so the overall logging pipeline is not yet highly available.
+
+## 13.18 Useful Troubleshooting and Verification Commands
+
+| Task | Command |
+|---|---|
+| Check Fluent Bit pods | `kubectl get pods -n logging -l app.kubernetes.io/name=fluent-bit -o wide` |
+| Check Fluent Bit DaemonSet | `kubectl get ds -n logging` |
+| Check Fluent Bit logs | `kubectl logs -n logging -l app.kubernetes.io/name=fluent-bit --prefix` |
+| Check recent DNS/output errors | `kubectl logs -n logging -l app.kubernetes.io/name=fluent-bit --since=2m --prefix` |
+| Check Helm release | `helm list -n logging` |
+| Check applied Helm values | `helm get values fluent-bit -n logging -o yaml` |
+| Check Loki service | `kubectl get svc loki -n logging` |
+| Check Loki endpoints | `kubectl get endpoints loki -n logging` |
+| Check CoreDNS pods | `kubectl get pods -n kube-system` |
+| Check CoreDNS logs | `kubectl logs -n kube-system -l k8s-app=kube-dns --prefix` |
+| Port-forward Loki | `kubectl port-forward -n logging svc/loki 3100:3100` |
+| Check Loki readiness | `curl http://localhost:3100/ready` |
+
+## 13.19 Final Architecture
+
+The final log collection architecture implemented in this POC is:
+
+```text
+                  Kind Kubernetes Cluster
+                     ha-observability
+                             |
+             +---------------+---------------+
+             |               |               |
+       Control Plane      Worker 1        Worker 2
+             |               |               |
+        Container Logs  Container Logs  Container Logs
+             |               |               |
+        Fluent Bit      Fluent Bit      Fluent Bit
+             |               |               |
+             +---------------+---------------+
+                             |
+                    Kubernetes Metadata
+                        Enrichment
+                             |
+                        Loki Output
+                             |
+                             v
+                    Loki Service :3100
+                             |
+                             v
+                       Loki Storage
+                             |
+                             v
+                     Loki Query API
+                             |
+                             v
+                          Grafana
+```
+

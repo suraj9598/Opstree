@@ -680,9 +680,11 @@ The `kube_node_info` metric returned information for all three Kind cluster node
 
 Kube-state-metrics exposes Kubernetes object-state metrics. vmagent will scrape these metrics and send them to VictoriaMetrics for storage and querying through Grafana.
 
-## 10. VictoriaMetrics Setup
 
-### 10.1 Overview
+
+# 10. VictoriaMetrics Setup
+
+## 10.1 Overview
 
 VictoriaMetrics is a time-series database used to store and query metrics collected from Kubernetes nodes and workloads.
 
@@ -690,56 +692,85 @@ In this POC, VictoriaMetrics Single is deployed with three replicas across the t
 
 Each replica runs independently and has its own PersistentVolumeClaim (PVC). Pod Anti-Affinity is configured to distribute the replicas across different Kubernetes nodes.
 
-The objective of this setup is to establish the metrics storage layer and prepare the infrastructure for evaluating High Availability (HA) scenarios.
+Initially, VictoriaMetrics was deployed as the metrics storage layer. Later, vmagent was configured to scrape metrics from Kubernetes exporters and forward metrics to all three VictoriaMetrics instances using remote-write.
 
-**Current Status:**
-- Three VictoriaMetrics replicas deployed successfully.
-- All replicas are running on separate Kubernetes nodes.
+The objective of this setup is to evaluate metrics collection, storage distribution, pod scheduling, and HA-related behavior.
+
+### Current Status
+
+- Three VictoriaMetrics Single replicas deployed successfully.
+- All three replicas are running on separate Kubernetes nodes.
 - Three separate 5Gi PVCs are created and Bound.
-- VictoriaMetrics Service discovers all three pod endpoints.
-- VictoriaMetrics VMUI is accessible through the browser.
-- vmagent scraping and remote-write configuration is pending.
-- Metrics fan-out and failover testing are pending.
+- VictoriaMetrics headless Service discovers all three pod endpoints.
+- VictoriaMetrics VMUI is accessible through port-forwarding.
+- vmagent is deployed with three replicas.
+- vmagent scraping is configured for Node Exporter and kube-state-metrics.
+- Remote-write is configured to send metrics to all three VictoriaMetrics endpoints.
+- All three VictoriaMetrics endpoints successfully return metrics through query API.
+- Remote-write errors and retries were observed as zero during the verification period.
+- Failure testing and query failover testing are pending.
 
-### 10.2 Why We Selected This Approach
+## 10.2 Why We Selected This Approach
 
-#### 1. VictoriaMetrics Single
+### 1. VictoriaMetrics Single
 
-VictoriaMetrics Single was selected for this initial POC because it provides a lightweight and relatively simple deployment model.
+VictoriaMetrics Single was selected for the initial POC because it provides a lightweight and relatively simple deployment model.
 
 It allows us to focus on Kubernetes scheduling, persistent storage, and independent replica behavior without introducing the additional complexity of a native VictoriaMetrics Cluster deployment.
 
-#### 2. Three Replicas Across Three Nodes
+### 2. Three Replicas Across Three Nodes
 
-We deployed three independent VictoriaMetrics Single instances across the control-plane node and two worker nodes.
+Three VictoriaMetrics Single instances are deployed across the control-plane node and two worker nodes.
 
 This distribution allows us to evaluate pod and node failure scenarios and observe the availability of the remaining instances.
 
-#### 3. Pod Anti-Affinity
+### 3. Pod Anti-Affinity
 
 Required Pod Anti-Affinity is configured to prevent matching VictoriaMetrics pods from running on the same Kubernetes node.
 
 This ensures that each replica is distributed across a separate node.
 
-#### 4. Separate Persistent Storage
+If Anti-Affinity were not configured, Kubernetes could schedule multiple VictoriaMetrics replicas on the same node, reducing the benefit of node-level separation.
+
+### 4. Separate Persistent Storage
 
 Each VictoriaMetrics replica has its own 5Gi PersistentVolumeClaim.
 
 This provides independent storage for each instance and avoids sharing the same volume between replicas.
 
-#### 5. Helm-Based Deployment
+Separate PVCs also allow each instance to maintain its own data independently.
+
+### 5. Control-Plane Toleration
+
+The Kind control-plane node has a `NoSchedule` taint.
+
+A toleration is configured to allow VictoriaMetrics pods to run on the control-plane node.
+
+Without this toleration, Kubernetes would not schedule the VictoriaMetrics pod on the control-plane node.
+
+### 6. Helm-Based Deployment
 
 Helm was selected to manage the deployment because it provides repeatable installation and centralized configuration through `values.yaml`.
 
 Replica count, storage, resources, retention period, and scheduling rules can be maintained in a single configuration file.
 
-#### 6. Kind for Local POC
+### 7. Kind for Local POC
 
-Kind provides a local multi-node Kubernetes environment. It allows us to test the deployment and scheduling behavior without provisioning a separate production Kubernetes infrastructure.
+Kind provides a local multi-node Kubernetes environment.
 
-**Important HA Limitation:** The three VictoriaMetrics Single instances do not automatically replicate data between themselves. The headless Service discovers the pod endpoints but does not distribute or replicate metrics data. vmagent remote-write fan-out and query failover must be configured and tested separately.
+It allows us to test deployment and scheduling behavior without provisioning separate production Kubernetes infrastructure.
 
-### 10.3 Deployment Details
+### 8. vmagent Remote-Write Integration
+
+Initially, the VictoriaMetrics instances were running independently and were not receiving metrics from vmagent.
+
+To establish the metrics ingestion flow, vmagent was configured to scrape Kubernetes metrics and send them to the VictoriaMetrics endpoints.
+
+This is necessary to evaluate metrics ingestion and data availability at each backend.
+
+**Important HA Limitation:** The three VictoriaMetrics Single instances do not automatically replicate data between themselves. Remote-write fan-out sends metrics to the configured endpoints, but this is not native data replication between VictoriaMetrics servers. Query failover and failure scenarios must be tested separately.
+
+## 10.3 Deployment Details
 
 | Configuration | Value |
 |---|---|
@@ -756,7 +787,7 @@ Kind provides a local multi-node Kubernetes environment. It allows us to test th
 | StorageClass | `standard` |
 | HTTP Port | `8428` |
 
-### 10.4 Helm Repository Setup
+## 10.4 Helm Repository Setup
 
 Add the VictoriaMetrics Helm repository:
 
@@ -783,7 +814,7 @@ kubectl create namespace metrics \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-### 10.5 VictoriaMetrics Configuration
+## 10.5 VictoriaMetrics Configuration
 
 **File Path:**
 
@@ -828,22 +859,22 @@ server:
       memory: 512Mi
 ```
 
-### 10.6 Configuration Explanation
+## 10.6 Configuration Explanation
 
-| Configuration | Explanation |
-|---|---|
-| `replicaCount: 3` | Creates three VictoriaMetrics Single replicas. |
-| `retentionPeriod: "1"` | Configures one-day data retention. |
-| `tolerations` | Allows a VictoriaMetrics pod to be scheduled on the control-plane node. |
-| `podAntiAffinity` | Prevents matching pods from being scheduled on the same node. |
-| `topologyKey: kubernetes.io/hostname` | Uses the node hostname as the scheduling separation boundary. |
-| `persistentVolume.enabled: true` | Enables persistent storage for each replica. |
-| `size: 5Gi` | Requests 5Gi storage for each replica. |
-| `storageClassName: standard` | Uses the Kind `standard` StorageClass. |
-| `resources.requests` | Defines the minimum CPU and memory requested by each pod. |
-| `resources.limits` | Defines the maximum CPU and memory allowed for each pod. |
+| Configuration | Explanation | Why It Is Required |
+|---|---|---|
+| `replicaCount: 3` | Creates three VictoriaMetrics Single replicas. | To evaluate availability across three Kubernetes nodes. |
+| `retentionPeriod: "1"` | Configures one-day data retention. | To control the duration of stored metrics during the POC. |
+| `tolerations` | Allows a pod to run on the control-plane node. | The control-plane node has a `NoSchedule` taint. |
+| `podAntiAffinity` | Prevents matching pods from running on the same node. | To distribute replicas across different nodes. |
+| `topologyKey: kubernetes.io/hostname` | Uses node hostname as the separation boundary. | To ensure node-level distribution. |
+| `persistentVolume.enabled: true` | Enables persistent storage. | To retain metrics data beyond the container lifecycle. |
+| `size: 5Gi` | Requests 5Gi storage per replica. | To provide independent storage capacity. |
+| `storageClassName: standard` | Uses the Kind `standard` StorageClass. | To provision local persistent volumes in Kind. |
+| `resources.requests` | Defines minimum requested CPU and memory. | To help Kubernetes schedule the pods based on resource requirements. |
+| `resources.limits` | Defines maximum CPU and memory allowed. | To prevent uncontrolled resource consumption. |
 
-### 10.7 Render and Validate Helm Templates
+## 10.7 Render and Validate Helm Templates
 
 Export the default Helm values:
 
@@ -887,7 +918,7 @@ grep -n -A 15 'tolerations:' vm-rendered.yaml
 
 The rendered manifest was verified to contain three replicas, required Pod Anti-Affinity, control-plane toleration, and a 5Gi PVC template.
 
-### 10.8 Install VictoriaMetrics
+## 10.8 Install VictoriaMetrics
 
 Install VictoriaMetrics using Helm:
 
@@ -898,7 +929,7 @@ helm upgrade --install vm-single vm/victoria-metrics-single \
   --values values.yaml
 ```
 
-### 10.9 Verify VictoriaMetrics Pods
+## 10.9 Verify VictoriaMetrics Pods
 
 Check the pods and their node placement:
 
@@ -916,7 +947,7 @@ kubectl get pods -n metrics -o wide
 
 All three VictoriaMetrics pods are running on separate Kubernetes nodes.
 
-### 10.10 Verify PersistentVolumeClaims
+## 10.10 Verify PersistentVolumeClaims
 
 Check PVCs:
 
@@ -934,21 +965,19 @@ kubectl get pvc -n metrics
 
 Each VictoriaMetrics replica has its own persistent storage.
 
-### 10.11 Verify Service and Endpoints
+## 10.11 Verify Service and Endpoints
 
 Check the Service:
 
 ```bash
 kubectl get svc -n metrics
 ```
-<img width="1020" height="92" alt="image" src="https://github.com/user-attachments/assets/4e6fc637-e323-4b96-817a-35c2560f88d0" />
 
 Check the Endpoints:
 
 ```bash
 kubectl get endpoints -n metrics
 ```
-<img width="1078" height="106" alt="image" src="https://github.com/user-attachments/assets/daf2eed2-450b-47f6-af14-4ad4e609bc64" />
 
 **Observed Service Details:**
 
@@ -964,7 +993,7 @@ The headless Service discovers all three VictoriaMetrics pod endpoints on port `
 
 This confirms endpoint discovery and does not indicate automatic data replication.
 
-### 10.12 Access VictoriaMetrics UI in Browser
+## 10.12 Access VictoriaMetrics UI in Browser
 
 VictoriaMetrics VMUI can be accessed through Kubernetes port-forwarding.
 
@@ -982,23 +1011,22 @@ Open the following URL in the browser:
 ```text
 http://localhost:8428/vmui/
 ```
-<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/59a79357-43e8-44b1-9cbd-dfc463880d36" />
 
 The VictoriaMetrics VMUI was successfully opened in the browser.
 
-### 10.13 Query Verification
+## 10.13 Query Verification
 
-In the VMUI query section, execute the following query:
+In the VMUI query section, execute:
 
 ```promql
 up
 ```
 
-This query can be used to check the availability of scraped targets once metrics collection is configured.
+This query checks the availability of scraped targets once metrics collection is configured.
 
-At the current stage, the expected metrics may not be available because vmagent scraping and remote-write configuration are still pending.
+After vmagent configuration, the query was also verified against the individual VictoriaMetrics instances.
 
-### 10.14 Current Architecture
+## 10.14 Updated VictoriaMetrics Architecture
 
 ```text
                  Kind Kubernetes Cluster
@@ -1017,6 +1045,503 @@ At the current stage, the expected metrics may not be available because vmagent 
                            |
                 Headless Service :8428
                            |
-                         VMUI
+             Individual VMUI / Query API
 ```
+
+The VictoriaMetrics instances run independently. vmagent sends metrics to the configured endpoints, but backend data replication is not automatic.
+
+---
+
+# 11. vmagent Setup
+
+## 11.1 Overview
+
+vmagent is a metrics collection and forwarding component developed by VictoriaMetrics.
+
+It is responsible for scraping metrics from Prometheus-compatible endpoints and forwarding the collected metrics to VictoriaMetrics using the remote-write protocol.
+
+In this POC, vmagent is deployed with three replicas in the `metrics` namespace.
+
+The vmagent configuration includes:
+
+- Three vmagent replicas.
+- StatefulSet deployment mode.
+- Cluster mode enabled.
+- Replication factor set to 2.
+- Global scrape interval of 10 seconds.
+- Node Exporter scraping.
+- kube-state-metrics scraping.
+- Remote-write to all three VictoriaMetrics Single endpoints.
+- Pod distribution across the three Kubernetes nodes.
+- Control-plane toleration.
+
+The objective is to create a distributed metrics collection and forwarding layer.
+
+## 11.2 Why vmagent Was Required
+
+Before vmagent was configured, VictoriaMetrics instances were deployed and their services were available, but the metrics collection and forwarding flow was not established.
+
+vmagent was introduced to:
+
+1. Collect metrics from Node Exporter.
+2. Collect Kubernetes object-state metrics from kube-state-metrics.
+3. Forward metrics to VictoriaMetrics.
+4. Configure remote-write fan-out to the three VictoriaMetrics endpoints.
+5. Evaluate distributed metrics collection.
+6. Prepare the environment for future failure and HA testing.
+
+## 11.3 Deployment Details
+
+| Configuration | Value |
+|---|---|
+| Component | vmagent |
+| Namespace | `metrics` |
+| Helm Release | `vmagent` |
+| Helm Chart | `vm/victoria-metrics-agent` |
+| Chart Version | `0.52.0` |
+| VictoriaMetrics App Version | `v1.156.0` |
+| Replica Count | 3 |
+| Deployment Mode | StatefulSet |
+| Cluster Mode | Enabled |
+| Replication Factor | 2 |
+| Scrape Interval | 10 seconds |
+| Remote-Write Backend | VictoriaMetrics Single |
+| Manifest / Values File | `vmagent/vmagent-default-values.yaml` |
+
+## 11.4 Helm Repository Setup
+
+The VictoriaMetrics Helm repository was already configured during the VictoriaMetrics installation.
+
+Verify the repository:
+
+```bash
+helm repo list
+```
+
+Update the repository:
+
+```bash
+helm repo update
+```
+
+Check the vmagent chart version:
+
+```bash
+helm search repo vm/victoria-metrics-agent --versions
+```
+
+## 11.5 vmagent Configuration File
+
+**File Path:**
+
+`~/ha-observability-poc/vmagent/vmagent-default-values.yaml`
+
+The vmagent values file was customized to configure the replicas, cluster mode, remote-write destinations, scrape configuration, and scheduling rules.
+
+### Core vmagent Configuration
+
+The following represents the important configuration blocks used in the POC:
+
+```yaml
+replicaCount: 3
+
+mode: statefulSet
+
+statefulSet:
+  clusterMode: true
+  replicationFactor: 2
+
+config:
+  global:
+    scrape_interval: 10s
+
+  remoteWrite:
+    - url: "http://vm-single-victoria-metrics-single-server-0.vm-single-victoria-metrics-single-server.metrics.svc.cluster.local:8428/api/v1/write"
+
+    - url: "http://vm-single-victoria-metrics-single-server-1.vm-single-victoria-metrics-single-server.metrics.svc.cluster.local:8428/api/v1/write"
+
+    - url: "http://vm-single-victoria-metrics-single-server-2.vm-single-victoria-metrics-single-server.metrics.svc.cluster.local:8428/api/v1/write"
+```
+
+The scrape configuration is also customized to discover Node Exporter and kube-state-metrics endpoints through Kubernetes service discovery.
+
+> Note: The block above documents the key configuration values. The complete chart values file may contain additional chart-default fields and other settings.
+
+## 11.6 Remote-Write Configuration Explanation
+
+### 1. Three vmagent Replicas
+
+```yaml
+replicaCount: 3
+```
+
+This creates three vmagent pods.
+
+**Why?**
+
+To distribute metrics collection across the Kubernetes nodes and evaluate the behavior of multiple vmagent instances.
+
+### 2. StatefulSet Mode
+
+```yaml
+mode: statefulSet
+```
+
+**Why?**
+
+StatefulSet provides stable pod identities, which are useful when configuring distributed vmagent instances.
+
+### 3. Cluster Mode
+
+```yaml
+statefulSet:
+  clusterMode: true
+```
+
+**Why?**
+
+Cluster mode enables vmagent's distributed scraping behavior so that scrape targets can be distributed across vmagent replicas rather than every replica independently scraping the complete target set.
+
+### 4. Replication Factor
+
+```yaml
+statefulSet:
+  replicationFactor: 2
+```
+
+**Why?**
+
+The replication factor is configured to 2 to allow target scraping data to be replicated between vmagent instances according to its cluster-mode behavior.
+
+This is a vmagent-side replication setting. It does not configure native replication between VictoriaMetrics Single servers.
+
+### 5. Scrape Interval
+
+```yaml
+config:
+  global:
+    scrape_interval: 10s
+```
+
+**Why?**
+
+Metrics are collected every 10 seconds.
+
+A shorter scrape interval provides more frequent monitoring data but increases the number of scrape requests and the volume of metrics.
+
+### 6. Remote-Write Endpoints
+
+Remote-write is configured to send data to all three VictoriaMetrics Single endpoints.
+
+**Why?**
+
+Each VictoriaMetrics instance has its own storage. Sending metrics to the configured endpoints ensures that metrics are ingested by each configured destination.
+
+This approach is used to evaluate metrics fan-out and backend availability.
+
+## 11.7 Remote-Write Architecture
+
+```text
+                  Kubernetes Cluster
+                 ha-observability
+                         |
+          +--------------+--------------+
+          |              |              |
+       Worker 1       Worker 2     Control Plane
+          |              |              |
+       vmagent-0      vmagent-1      vmagent-2
+          |              |              |
+          +--------------+--------------+
+                         |
+                  Remote Write
+                         |
+        +----------------+----------------+
+        |                |                |
+        v                v                v
+ VictoriaMetrics   VictoriaMetrics   VictoriaMetrics
+   Replica 0         Replica 1         Replica 2
+        |                |                |
+      PVC 5Gi          PVC 5Gi          PVC 5Gi
+```
+
+This architecture shows the metrics collection and remote-write flow.
+
+The VictoriaMetrics instances are independent storage backends. Remote-write fan-out is configured at vmagent.
+
+## 11.8 Configure Scrape Targets
+
+vmagent is configured to scrape metrics from the following components:
+
+| Target | Namespace | Metrics Port | Purpose |
+|---|---|---|---|
+| Node Exporter | `metrics` | 9100 | Node CPU, memory, disk, and network metrics |
+| kube-state-metrics | `metrics` | 8080 | Kubernetes Pod, Node, Deployment, and object-state metrics |
+
+### Node Exporter
+
+Node Exporter is deployed as a DaemonSet.
+
+Each eligible Kubernetes node runs one Node Exporter pod, exposing metrics on port `9100`.
+
+The vmagent Kubernetes service discovery configuration selects the Node Exporter service endpoints.
+
+### kube-state-metrics
+
+kube-state-metrics is deployed as a Deployment with one replica.
+
+It exposes Kubernetes object-state metrics through its Service on port `8080`.
+
+vmagent discovers the kube-state-metrics endpoint and scrapes the `/metrics` path.
+
+## 11.9 Kubernetes Service Discovery
+
+The vmagent scrape configuration uses Kubernetes endpoint service discovery.
+
+The discovery configuration is restricted to the `metrics` namespace.
+
+The service discovery configuration filters the relevant services and endpoint port name `metrics`.
+
+**Why Kubernetes service discovery was used:**
+
+- It automatically discovers endpoints when pods are recreated.
+- It avoids manually maintaining static pod IP addresses.
+- It supports dynamic Kubernetes workloads.
+- It makes the scrape configuration easier to maintain.
+
+## 11.10 Scheduling Configuration
+
+vmagent pods are configured to distribute across the three Kind nodes.
+
+### Control-Plane Toleration
+
+```yaml
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+```
+
+**Why?**
+
+The control-plane node has a `NoSchedule` taint. This toleration allows vmagent to run on the control-plane node.
+
+Without the toleration, vmagent pods would be restricted from running on the control-plane node.
+
+### Topology Spread Constraints
+
+```yaml
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: DoNotSchedule
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/instance: vmagent
+        app.kubernetes.io/name: victoria-metrics-agent
+```
+
+**Why?**
+
+Topology spread constraints help distribute vmagent pods evenly across Kubernetes nodes.
+
+`maxSkew: 1` allows a maximum difference of one matching pod between eligible nodes.
+
+`topologyKey: kubernetes.io/hostname` uses the node hostname as the distribution boundary.
+
+`whenUnsatisfiable: DoNotSchedule` prevents Kubernetes from scheduling a pod if the required distribution cannot be satisfied.
+
+## 11.11 Install vmagent
+
+Install vmagent using Helm:
+
+```bash
+helm upgrade --install vmagent vm/victoria-metrics-agent \
+  --version 0.52.0 \
+  --namespace metrics \
+  --values vmagent/vmagent-default-values.yaml
+```
+
+## 11.12 Verify vmagent Pods
+
+Check the pods:
+
+```bash
+kubectl get pods -n metrics -o wide
+```
+
+**Observed Deployment Result:**
+
+| Pod | Kubernetes Node | Status |
+|---|---|---|
+| `vmagent-0` | `ha-observability-worker2` | Running |
+| `vmagent-1` | `ha-observability-worker` | Running |
+| `vmagent-2` | `ha-observability-control-plane` | Running |
+
+All three vmagent replicas were observed running across the three Kubernetes nodes.
+
+## 11.13 Verify vmagent Targets
+
+vmagent exposes an HTTP endpoint for checking scrape target status.
+
+Port-forward vmagent:
+
+```bash
+kubectl port-forward -n metrics pod/vmagent-0 8429:8429
+```
+
+Check target status:
+
+```bash
+curl -s http://localhost:8429/api/v1/targets
+```
+
+The target API provides information about discovered scrape targets and their health.
+
+The configured targets were observed as healthy (`up`).
+
+## 11.14 Verify Remote-Write Metrics
+
+Check vmagent remote-write metrics:
+
+```bash
+curl -s http://localhost:8429/metrics | \
+  grep -E 'vmagent_remotewrite_(errors|retries|requests)'
+```
+
+### Observed Verification
+
+The following was observed during the verification period:
+
+- Remote-write error counters were `0`.
+- Remote-write retry counters were `0`.
+- Successful HTTP 2XX remote-write requests were observed for all three configured destinations.
+- The request counters were approximately 1471, 1466, and 1468 respectively at the time of observation.
+
+These results indicate that vmagent successfully sent remote-write requests to the configured VictoriaMetrics endpoints during the observed period.
+
+The counters are time-dependent and may change during subsequent runs.
+
+## 11.15 Verify Metrics in All VictoriaMetrics Instances
+
+Port-forward each VictoriaMetrics instance individually.
+
+### VictoriaMetrics Replica 0
+
+```bash
+kubectl port-forward -n metrics \
+  pod/vm-single-victoria-metrics-single-server-0 8428:8428
+```
+
+Query:
+
+```bash
+curl -s "http://localhost:8428/api/v1/query?query=up"
+```
+
+### VictoriaMetrics Replica 1
+
+```bash
+kubectl port-forward -n metrics \
+  pod/vm-single-victoria-metrics-single-server-1 18429:8428
+```
+
+Query:
+
+```bash
+curl -s "http://localhost:18429/api/v1/query?query=up"
+```
+
+### VictoriaMetrics Replica 2
+
+```bash
+kubectl port-forward -n metrics \
+  pod/vm-single-victoria-metrics-single-server-2 18430:8428
+```
+
+Query:
+
+```bash
+curl -s "http://localhost:18430/api/v1/query?query=up"
+```
+
+### Observed Result
+
+All three VictoriaMetrics instances returned a successful query API response for `up`.
+
+The returned metrics included:
+
+- Node Exporter targets from the three Kind nodes.
+- kube-state-metrics.
+- Kubernetes API server.
+- kubelet and cAdvisor-related targets.
+- CoreDNS.
+- vmagent.
+
+This confirms that the metrics were available for querying in all three configured VictoriaMetrics endpoints during the verification period.
+
+**Important:** Query results from the three instances do not prove native backend replication. Each backend remains an independent VictoriaMetrics Single instance.
+
+## 11.16 Port-Forwarding Reference
+
+The following local ports were used during verification:
+
+| Component | Local Port | Remote Port |
+|---|---:|---:|
+| vmagent-0 | 8429 | 8429 |
+| vmagent-1 | 8430 | 8429 |
+| vmagent-2 | 8431 | 8429 |
+| VictoriaMetrics Replica 0 | 8428 | 8428 |
+| VictoriaMetrics Replica 1 | 18429 | 8428 |
+| VictoriaMetrics Replica 2 | 18430 | 8428 |
+
+Port-forwarding is used only for local verification and browser/API access.
+
+## 11.17 Current Metrics Ingestion Architecture
+
+```text
+                     Kind Kubernetes Cluster
+                       ha-observability
+                               |
+               +---------------+---------------+
+               |               |               |
+         Control Plane      Worker Node 1    Worker Node 2
+               |               |               |
+         Node Exporter    Node Exporter    Node Exporter
+               |               |               |
+               +---------------+---------------+
+                               |
+                       Kubernetes Discovery
+                               |
+                          vmagent
+                    (3 StatefulSet Replicas)
+                               |
+                         Remote-Write
+                               |
+          +--------------------+--------------------+
+          |                    |                    |
+          v                    v                    v
+ VictoriaMetrics         VictoriaMetrics       VictoriaMetrics
+   Replica 0               Replica 1             Replica 2
+     PVC 5Gi                 PVC 5Gi               PVC 5Gi
+          |                    |                    |
+          +--------------------+--------------------+
+                               |
+                      Query API / VMUI
+                               |
+                            Grafana
+```
+
+## 11.18 HA Considerations and Limitations
+
+The current POC provides distributed pod placement and metrics ingestion to multiple independent VictoriaMetrics Single instances.
+
+However, the following limitations must be considered:
+
+1. **No native VictoriaMetrics Single data replication:** Each instance maintains its own storage.
+2. **Remote-write fan-out is not backend replication:** Metrics are sent to configured endpoints independently.
+3. **Query failover is not configured:** A query client must be configured to handle backend availability.
+4. **Failure testing is pending:** Backend and vmagent failure scenarios have not yet been tested.
+5. **Kind is a local POC environment:** The setup does not represent production infrastructure availability.
+6. **Storage is independent:** A PVC failure affects the data stored on that particular VictoriaMetrics instance.
+7. **Data consistency and duplicate handling:** These behaviors must be evaluated during further testing.
 

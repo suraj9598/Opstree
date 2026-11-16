@@ -1011,6 +1011,8 @@ Open the following URL in the browser:
 ```text
 http://localhost:8428/vmui/
 ```
+<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/ee7f53c3-9faf-4120-ab34-856794ad74d1" />
+
 
 The VictoriaMetrics VMUI was successfully opened in the browser.
 

@@ -3972,3 +3972,1052 @@ A manually generated test trace was sent through the OTLP HTTP endpoint on port 
 Both trace ingestion and retrieval returned HTTP 200, confirming that the basic trace ingestion and retrieval workflow is working successfully.
 
 The next step is to integrate the OpenTelemetry Collector with Tempo so that traces can be exported automatically from telemetry sources instead of relying on manual test requests.
+
+# 15. OpenTelemetry Collector Setup
+
+## 15.1 Overview
+
+OpenTelemetry Collector is used to receive, process, and export telemetry data such as logs, metrics, and traces.
+
+In our Kubernetes observability POC, we deployed OpenTelemetry Collector as a DaemonSet in the `tracing` namespace.
+
+Our main objective was to configure OpenTelemetry Collector to receive traces from applications and forward them to Grafana Tempo.
+
+For this POC, we configured only the traces pipeline.
+
+- Logs pipeline: Disabled
+- Metrics pipeline: Disabled
+- Traces pipeline: Enabled
+
+The Collector receives traces through OTLP protocols and forwards them to Tempo using OTLP gRPC.
+
+## 15.2 Deployment Details
+
+| Component | Configuration |
+|---|---|
+| Component | OpenTelemetry Collector |
+| Namespace | tracing |
+| Deployment Mode | DaemonSet |
+| Helm Release | otel-collector |
+| Helm Repository | open-telemetry |
+| Helm Chart | opentelemetry-collector |
+| Chart Version | 0.178.3 |
+| App Version | 0.163.2 |
+| Image | otel/opentelemetry-collector-contrib |
+| Collector Pods | 3 |
+| OTLP gRPC | 4317 |
+| OTLP HTTP | 4318 |
+| Health Check | 13133 |
+| Exporter | OTLP |
+| Backend | Tempo |
+| Logs Pipeline | Disabled |
+| Metrics Pipeline | Disabled |
+| Traces Pipeline | Enabled |
+
+## 15.3 Why We Selected DaemonSet Mode
+
+Our Kind cluster contains three Kubernetes nodes:
+
+| Node | Role |
+|---|---|
+| ha-observability-control-plane | Control Plane |
+| ha-observability-worker | Worker |
+| ha-observability-worker2 | Worker |
+
+We selected DaemonSet mode so that one OpenTelemetry Collector pod runs on each Kubernetes node.
+
+This provides node-level Collector coverage. Kubernetes automatically maintains the Collector pods on eligible nodes.
+
+## 15.4 Helm Repository Setup
+
+First, we added the OpenTelemetry Helm repository.
+
+```bash
+helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+```
+
+Next, we updated the Helm repository information.
+
+```bash
+helm repo update
+```
+
+The repository was already configured in our environment, so Helm displayed:
+
+```text
+"open-telemetry" already exists with the same configuration, skipping
+```
+
+This was normal and not an error.
+
+## 15.5 Fetching Default Helm Values
+
+Before preparing our custom configuration, we downloaded the default values provided by the OpenTelemetry Collector Helm chart.
+
+```bash
+helm show values open-telemetry/opentelemetry-collector \
+  --version 0.178.3 > default-values.yaml
+```
+
+The command downloaded the chart's default configuration and saved it in `default-values.yaml`.
+
+We inspected this file to understand the available settings, including:
+
+- Deployment mode
+- Presets
+- Receivers
+- Processors
+- Exporters
+- Service pipelines
+- Ports
+- Resources
+- Health probes
+- Kubernetes Service configuration
+
+### 15.5.1 Inspecting Default Configuration
+
+We searched for the important configuration sections.
+
+```bash
+grep -nE 'receivers:|processors:|exporters:|service:|pipelines:|logs:|metrics:|traces:|otlp:' default-values.yaml
+```
+
+The output displayed the line numbers of the main configuration sections.
+
+We then inspected the receiver, processor, exporter, and pipeline configuration.
+
+```bash
+sed -n '250,340p' default-values.yaml
+```
+
+### 15.5.2 Default Exporter
+
+The default chart configuration contained:
+
+```yaml
+exporters:
+  debug: {}
+```
+
+The Debug exporter is used to display telemetry data for debugging.
+
+For our POC, we replaced it with an OTLP exporter connected to Tempo.
+
+### 15.5.3 Default Extensions
+
+The chart included the health check extension.
+
+```yaml
+extensions:
+  health_check:
+    endpoint: ${env:MY_POD_IP}:13133
+```
+
+This extension provides a health endpoint used by Kubernetes liveness and readiness probes.
+
+We retained this extension in our custom configuration.
+
+### 15.5.4 Default Processors
+
+The default configuration included:
+
+```yaml
+processors:
+  batch: {}
+
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+```
+
+- Memory Limiter: Helps control Collector memory consumption.
+- Batch: Groups telemetry data before exporting it.
+
+We retained both processors for our traces pipeline.
+
+### 15.5.5 Default Receivers
+
+The default chart provided multiple receivers.
+
+```yaml
+receivers:
+  jaeger:
+    protocols:
+      grpc:
+        endpoint: ${env:MY_POD_IP}:14250
+      thrift_http:
+        endpoint: ${env:MY_POD_IP}:14268
+      thrift_compact:
+        endpoint: ${env:MY_POD_IP}:6831
+
+  otlp:
+    protocols:
+      grpc:
+        endpoint: ${env:MY_POD_IP}:4317
+      http:
+        endpoint: ${env:MY_POD_IP}:4318
+
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: opentelemetry-collector
+          scrape_interval: 10s
+          static_configs:
+            - targets:
+                - ${env:MY_POD_IP}:8888
+
+  zipkin:
+    endpoint: ${env:MY_POD_IP}:9411
+```
+
+The available receivers were:
+
+| Receiver | Purpose |
+|---|---|
+| OTLP | Receive OpenTelemetry data |
+| Jaeger | Receive Jaeger traces |
+| Prometheus | Scrape Prometheus metrics |
+| Zipkin | Receive Zipkin traces |
+
+For our POC, we selected only the OTLP receiver.
+
+## 15.6 Understanding Default Pipelines
+
+The default Helm chart configuration contained three pipelines.
+
+**Logs Pipeline:**
+
+```yaml
+logs:
+  exporters:
+    - debug
+  processors:
+    - memory_limiter
+    - batch
+  receivers:
+    - otlp
+```
+
+**Metrics Pipeline:**
+
+```yaml
+metrics:
+  exporters:
+    - debug
+  processors:
+    - memory_limiter
+    - batch
+  receivers:
+    - otlp
+    - prometheus
+```
+
+**Traces Pipeline:**
+
+```yaml
+traces:
+  exporters:
+    - debug
+  processors:
+    - memory_limiter
+    - batch
+  receivers:
+    - otlp
+    - jaeger
+    - zipkin
+```
+
+The default chart connects all three pipelines to the Debug exporter.
+
+However, our requirement was to use OpenTelemetry Collector only for traces and forward them to Tempo.
+
+Therefore, we configured a separate traces-only pipeline.
+
+## 15.7 Inspecting alternateConfig
+
+We inspected the `alternateConfig` section.
+
+```bash
+sed -n '340,470p' default-values.yaml
+```
+
+The default configuration contained:
+
+```yaml
+alternateConfig: {}
+```
+
+The Helm chart supports `alternateConfig` for providing a complete custom Collector configuration.
+
+When this option is used:
+
+- The custom configuration replaces the default Collector configuration.
+- The default configuration is not merged with it.
+- Required receivers, processors, exporters, extensions, and pipelines must be defined manually.
+
+We selected `alternateConfig` to keep only the traces pipeline and avoid retaining the default logs and metrics pipelines.
+
+## 15.8 Helm Chart Version Verification
+
+We checked the Helm chart information.
+
+```bash
+helm show chart open-telemetry/opentelemetry-collector
+```
+
+The chart information showed:
+
+```yaml
+name: opentelemetry-collector
+version: 0.178.3
+appVersion: 0.163.2
+```
+
+We used chart version `0.178.3` for our deployment.
+
+We also downloaded the default values for this exact version:
+
+```bash
+helm show values open-telemetry/opentelemetry-collector \
+  --version 0.178.3 > default-values.yaml
+```
+
+## 15.9 Inspecting Presets
+
+We inspected the available presets in the default values file.
+
+```bash
+sed -n '1,160p' default-values.yaml
+```
+
+The chart provides presets for collecting logs, host metrics, Kubernetes metadata, kubelet metrics, Kubernetes events, and other telemetry.
+
+For our POC, these collection presets were kept disabled.
+
+| Preset | Configuration |
+|---|---|
+| logsCollection | Disabled |
+| hostMetrics | Disabled |
+| kubernetesAttributes | Disabled |
+| kubeletMetrics | Disabled |
+| kubernetesEvents | Disabled |
+| kubernetesObjects | Disabled |
+| clusterMetrics | Disabled |
+| annotationDiscovery | Disabled |
+| profiling | Disabled |
+| resourceDetection | Disabled |
+
+This keeps our configuration focused on trace ingestion and forwarding.
+
+## 15.10 Inspecting Resources and Deployment Settings
+
+We checked the default resource configuration.
+
+```bash
+grep -n -A20 '^resources:' default-values.yaml
+```
+
+The default values showed:
+
+```yaml
+resources: {}
+```
+
+No custom CPU or memory requests and limits were configured in the default values.
+
+For this initial POC, we retained the chart's default resource settings.
+
+## 15.11 Inspecting Ports and Service Configuration
+
+We inspected the available ports.
+
+```bash
+grep -n -A45 '^ports:' default-values.yaml
+```
+
+The chart provides the following ports:
+
+| Port | Purpose |
+|---|---|
+| 4317 | OTLP gRPC |
+| 4318 | OTLP HTTP |
+| 6831 | Jaeger Compact UDP |
+| 14268 | Jaeger Thrift HTTP |
+| 14250 | Jaeger gRPC |
+| 9411 | Zipkin |
+| 8888 | Collector Prometheus metrics |
+
+For our POC, we enabled only OTLP gRPC and OTLP HTTP.
+
+We also inspected the Service configuration.
+
+```bash
+grep -n -A20 '^service:' default-values.yaml
+```
+
+The chart requires explicit Service enablement when running in DaemonSet mode.
+
+We configured a ClusterIP Service to expose the OTLP ports inside the Kubernetes cluster.
+
+## 15.12 Inspecting Health Probes
+
+We inspected the default liveness, readiness, and startup probe configuration.
+
+```bash
+sed -n '600,690p' default-values.yaml
+```
+
+The default configuration contained:
+
+```yaml
+livenessProbe:
+  httpGet:
+    port: 13133
+    path: /
+
+readinessProbe:
+  httpGet:
+    port: 13133
+    path: /
+
+startupProbe: {}
+```
+
+We retained the default liveness and readiness probes.
+
+The health check extension listens on port `13133`.
+
+## 15.13 Creating Custom otel-values.yaml
+
+After inspecting the default Helm configuration, we created our custom values file.
+
+```bash
+nano otel-values.yaml
+```
+
+### Complete otel-values.yaml
+
+```yaml
+mode: daemonset
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+
+alternateConfig:
+  extensions:
+    health_check:
+      endpoint: 0.0.0.0:13133
+
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+  processors:
+    memory_limiter:
+      check_interval: 5s
+      limit_percentage: 80
+      spike_limit_percentage: 25
+    batch: {}
+
+  exporters:
+    otlp:
+      endpoint: tempo.tracing.svc.cluster.local:4317
+      tls:
+        insecure: true
+
+  service:
+    extensions:
+      - health_check
+    pipelines:
+      traces:
+        receivers:
+          - otlp
+        processors:
+          - memory_limiter
+          - batch
+        exporters:
+          - otlp
+
+presets:
+  logsCollection:
+    enabled: false
+  hostMetrics:
+    enabled: false
+  kubernetesAttributes:
+    enabled: false
+  kubeletMetrics:
+    enabled: false
+  kubernetesEvents:
+    enabled: false
+  kubernetesObjects:
+    enabled: false
+  clusterMetrics:
+    enabled: false
+  annotationDiscovery:
+    logs:
+      enabled: false
+    metrics:
+      enabled: false
+  profiling:
+    enabled: false
+  resourceDetection:
+    enabled: false
+
+service:
+  enabled: true
+  type: ClusterIP
+
+ports:
+  otlp:
+    enabled: true
+  otlp-http:
+    enabled: true
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+  metrics:
+    enabled: false
+
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+```
+
+## 15.14 Configuration Explanation
+
+### 1. DaemonSet Mode
+
+```yaml
+mode: daemonset
+```
+
+Runs one Collector pod on every eligible Kubernetes node.
+
+### 2. OTLP Receiver
+
+```yaml
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+```
+
+Accepts trace data through OTLP gRPC and HTTP.
+
+### 3. Processors
+
+```yaml
+processors:
+  memory_limiter:
+    check_interval: 5s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  batch: {}
+```
+
+Memory Limiter helps control memory usage, while Batch groups traces before exporting them.
+
+### 4. OTLP Exporter
+
+```yaml
+exporters:
+  otlp:
+    endpoint: tempo.tracing.svc.cluster.local:4317
+    tls:
+      insecure: true
+```
+
+Forwards traces to the Tempo Service using OTLP gRPC.
+
+### 5. Traces Pipeline
+
+```yaml
+service:
+  extensions:
+    - health_check
+  pipelines:
+    traces:
+      receivers:
+        - otlp
+      processors:
+        - memory_limiter
+        - batch
+      exporters:
+        - otlp
+```
+
+This pipeline receives traces, processes them, and forwards them to Tempo.
+
+Only the traces pipeline is defined.
+
+### 6. Service Configuration
+
+```yaml
+service:
+  enabled: true
+  type: ClusterIP
+```
+
+Creates an internal Kubernetes Service for the Collector.
+
+### 7. Port Configuration
+
+Only OTLP ports are enabled.
+
+```yaml
+ports:
+  otlp:
+    enabled: true
+  otlp-http:
+    enabled: true
+  jaeger-compact:
+    enabled: false
+  jaeger-thrift:
+    enabled: false
+  jaeger-grpc:
+    enabled: false
+  zipkin:
+    enabled: false
+  metrics:
+    enabled: false
+```
+
+### 8. Control Plane Toleration
+
+```yaml
+tolerations:
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+```
+
+Our control-plane node has a `NoSchedule` taint.
+
+This toleration allows the Collector DaemonSet to schedule a pod on the control-plane node as well.
+
+## 15.15 Helm Template Validation
+
+Before installing the Collector, we generated the Kubernetes manifests.
+
+```bash
+helm template otel-collector open-telemetry/opentelemetry-collector \
+  --version 0.178.3 \
+  --namespace tracing \
+  -f otel-values.yaml > otel-rendered.yaml
+```
+
+The rendered manifests were saved in `otel-rendered.yaml`.
+
+### Verify DaemonSet and Service
+
+```bash
+grep -nE 'kind: DaemonSet|kind: Service|kind: Deployment' otel-rendered.yaml
+```
+
+The output confirmed:
+
+```text
+kind: ServiceAccount
+kind: Service
+kind: DaemonSet
+```
+
+### Verify Pipelines
+
+```bash
+grep -nE 'logs:|metrics:|traces:|tempo.tracing|health_check:' otel-rendered.yaml
+```
+
+The rendered configuration contained:
+
+```text
+endpoint: tempo.tracing.svc.cluster.local:4317
+health_check:
+traces:
+```
+
+Only the traces pipeline was present.
+
+### Verify Service Ports
+
+```bash
+sed -n '65,155p' otel-rendered.yaml
+```
+
+The Service exposed:
+
+```yaml
+ports:
+  - name: otlp
+    port: 4317
+    targetPort: 4317
+    protocol: TCP
+
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318
+    protocol: TCP
+```
+
+### Verify DaemonSet Ports
+
+```bash
+sed -n '145,230p' otel-rendered.yaml
+```
+
+The Collector container exposed OTLP ports `4317` and `4318`.
+
+Both ports also had `hostPort` configured by the chart defaults.
+
+### Verify Tolerations
+
+```bash
+grep -n -A5 'tolerations:' otel-rendered.yaml
+```
+
+The rendered DaemonSet contained the control-plane toleration.
+
+## 15.16 Installing OpenTelemetry Collector
+
+After validating the rendered Kubernetes manifests, we installed the Collector.
+
+```bash
+helm install otel-collector open-telemetry/opentelemetry-collector \
+  --version 0.178.3 \
+  --namespace tracing \
+  -f otel-values.yaml
+```
+
+### Verify Collector Pods
+
+```bash
+kubectl get pods -o wide -n tracing
+```
+
+Observed output:
+
+```text
+NAME                                                 READY   STATUS    RESTARTS   NODE
+otel-collector-opentelemetry-collector-agent-pg574   1/1     Running   0          ha-observability-control-plane
+otel-collector-opentelemetry-collector-agent-qgw8r   1/1     Running   0          ha-observability-worker
+otel-collector-opentelemetry-collector-agent-w6k4t   1/1     Running   0          ha-observability-worker2
+tempo-0                                              1/1     Running   0          ha-observability-worker2
+```
+
+All three Collector pods were running on separate Kubernetes nodes.
+
+## 15.17 Verifying Collector Logs
+
+We checked the Collector logs.
+
+```bash
+kubectl logs -n tracing \
+  otel-collector-opentelemetry-collector-agent-pg574 \
+  --tail=50
+```
+
+The logs showed:
+
+```text
+Starting GRPC server
+endpoint: [::]:4317
+
+Starting HTTP server
+endpoint: [::]:4318
+
+Health Check state change
+status: ready
+
+Everything is ready. Begin running and processing data.
+```
+
+This confirmed that the Collector started successfully and both OTLP receivers were listening.
+
+## 15.18 Verifying Collector Service
+
+Command:
+
+```bash
+kubectl get svc -n tracing
+```
+
+Observed Collector Service:
+
+```text
+NAME                                     TYPE        CLUSTER-IP
+otel-collector-opentelemetry-collector   ClusterIP   10.96.66.137
+```
+
+The Service exposed:
+
+```text
+4317/TCP
+4318/TCP
+```
+
+Applications inside the cluster can use the following endpoints.
+
+**OTLP gRPC:**
+
+```text
+otel-collector-opentelemetry-collector.tracing.svc.cluster.local:4317
+```
+
+**OTLP HTTP:**
+
+```text
+http://otel-collector-opentelemetry-collector.tracing.svc.cluster.local:4318
+```
+
+## 15.19 End-to-End Trace Testing
+
+We tested trace ingestion by sending a manually generated OTLP trace through the Collector.
+
+### Step 1: Port Forward Collector
+
+```bash
+kubectl port-forward -n tracing \
+  svc/otel-collector-opentelemetry-collector 4318:4318
+```
+
+### Step 2: Send Test Trace
+
+From another terminal, we sent a test trace using curl.
+
+```bash
+curl -i http://127.0.0.1:4318/v1/traces \
+  -H "Content-Type: application/json" \
+  -d '{
+    "resourceSpans": [{
+      "resource": {
+        "attributes": [{
+          "key": "service.name",
+          "value": {"stringValue": "otel-collector-poc"}
+        }]
+      },
+      "scopeSpans": [{
+        "spans": [{
+          "traceId": "5b8aa5a2d2c872e8321cf37308d69df3",
+          "spanId": "051581bf3cb55c13",
+          "name": "collector-to-tempo-test",
+          "kind": 1,
+          "startTimeUnixNano": "1794860000000000000",
+          "endTimeUnixNano": "1794860001000000000"
+        }]
+      }]
+    }]
+  }'
+```
+
+### Step 3: Collector Response
+
+Observed response:
+
+```text
+HTTP/1.1 200 OK
+
+{"partialSuccess":{}}
+```
+
+The Collector accepted the trace request successfully.
+
+## 15.20 Verifying Trace in Tempo
+
+We then checked whether the trace was available in Tempo.
+
+### Step 1: Port Forward Tempo
+
+```bash
+kubectl port-forward -n tracing svc/tempo 3200:3200
+```
+
+### Step 2: Retrieve Trace
+
+```bash
+curl -s http://127.0.0.1:3200/api/traces/5b8aa5a2d2c872e8321cf37308d69df3
+```
+
+Observed response:
+
+```json
+{
+  "batches": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "otel-collector-poc"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {},
+          "spans": [
+            {
+              "name": "collector-to-tempo-test",
+              "kind": "SPAN_KIND_INTERNAL"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+The response contained the expected service name and span name.
+
+### Trace Verification Result
+
+| Attribute | Value |
+|---|---|
+| Service Name | otel-collector-poc |
+| Span Name | collector-to-tempo-test |
+| Trace ID | 5b8aa5a2d2c872e8321cf37308d69df3 |
+| Span ID | 051581bf3cb55c13 |
+| Collector Response | HTTP 200 |
+| Tempo Retrieval | Successful |
+
+Tempo returned the trace successfully.
+
+The response represents trace and span IDs in Base64 encoding, corresponding to the hexadecimal IDs sent in the original request.
+
+This confirmed that the Collector successfully forwarded the trace to Tempo.
+
+## 15.21 Final Architecture
+
+```text
+                 Kubernetes Cluster
+                 Namespace: tracing
+
+   Node 1              Node 2              Node 3
++------------+      +------------+      +------------+
+| Control    |      | Worker     |      | Worker2    |
+| Plane      |      |            |      |            |
+|            |      |            |      |            |
+| OTel       |      | OTel       |      | OTel       |
+| Collector  |      | Collector  |      | Collector  |
+| Pod        |      | Pod        |      | Pod        |
++------------+      +------------+      +------------+
+       |                  |                   |
+       +------------------+-------------------+
+                          |
+                    OTLP Receiver
+                     4317 / 4318
+                          |
+                    Traces Pipeline
+                          |
+                   Memory Limiter
+                          |
+                        Batch
+                          |
+                    OTLP Exporter
+                          |
+                          v
+              tempo.tracing.svc.cluster.local
+                          |
+                    OTLP gRPC 4317
+                          |
+                          v
+                     +---------+
+                     |  Tempo  |
+                     |         |
+                     |  Trace  |
+                     | Storage |
+                     +---------+
+                          |
+                          v
+                   Query API 3200
+```
+
+## 15.22 Useful Commands
+
+**Check Collector pods:**
+
+```bash
+kubectl get pods -n tracing -o wide
+```
+
+**Check DaemonSet:**
+
+```bash
+kubectl get daemonset -n tracing
+```
+
+**Check Services:**
+
+```bash
+kubectl get svc -n tracing
+```
+
+**Check Collector logs:**
+
+```bash
+kubectl logs -n tracing \
+  -l app.kubernetes.io/instance=otel-collector \
+  --tail=100
+```
+
+**Describe Collector pod:**
+
+```bash
+kubectl describe pod -n tracing \
+  otel-collector-opentelemetry-collector-agent-pg574
+```
+
+**Check Helm release:**
+
+```bash
+helm list -n tracing
+```
+
+**Check installed Helm values:**
+
+```bash
+helm get values otel-collector -n tracing
+```
+
+**Check Collector ConfigMap:**
+
+```bash
+kubectl get configmap -n tracing \
+  otel-collector-opentelemetry-collector-agent -o yaml
+```
+
+## 15.23 Final Deployment Result
+
+| Component | Final Status |
+|---|---|
+| Helm Repository | Configured |
+| Helm Chart | 0.178.3 |
+| Collector App Version | 0.163.2 |
+| Deployment Mode | DaemonSet |
+| Collector Pods | 3/3 Running |
+| OTLP gRPC Receiver | Working |
+| OTLP HTTP Receiver | Working |
+| Health Check | Ready |
+| Logs Pipeline | Disabled |
+| Metrics Pipeline | Disabled |
+| Traces Pipeline | Enabled |
+| Tempo Exporter | Configured |
+| Test Trace Ingestion | Successful |
+| Tempo Trace Retrieval | Successful |
+

@@ -434,3 +434,249 @@ curl http://localhost:9100/metrics
 ```
 
 The `/metrics` endpoint returns metrics in Prometheus exposition format. These metrics will be scraped by vmagent and stored in VictoriaMetrics for visualization in Grafana.
+```
+## 9. Kube-State-Metrics Setup
+
+### 9.1 Overview
+
+Kube-state-metrics is a Kubernetes monitoring component that collects information about the state of Kubernetes objects and exposes it in Prometheus-compatible metrics format.
+
+It provides metrics related to:
+- Pods
+- Nodes
+- Deployments
+- ReplicaSets
+- StatefulSets
+- PersistentVolumeClaims
+- Jobs and CronJobs
+
+Node Exporter collects operating-system-level metrics, whereas kube-state-metrics provides Kubernetes object-state metrics.
+
+### 9.2 Installation Method
+
+Kube-state-metrics is installed using Kubernetes YAML manifests.
+
+**Manifest file location:**
+
+`kube-state-metrics/kube-state-metrics.yaml`
+
+**Namespace:** `metrics`
+
+**Resources created:**
+- ServiceAccount
+- ClusterRole
+- ClusterRoleBinding
+- Deployment
+- ClusterIP Service
+
+### 9.3 Complete YAML Manifest
+
+Create the file:
+
+```bash
+mkdir -p kube-state-metrics
+nano kube-state-metrics/kube-state-metrics.yaml
+```
+
+Add the following configuration:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-state-metrics
+  namespace: metrics
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kube-state-metrics
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - nodes
+      - namespaces
+      - services
+      - persistentvolumeclaims
+      - persistentvolumes
+      - configmaps
+      - replicationcontrollers
+    verbs: ["list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - replicasets
+      - daemonsets
+      - statefulsets
+    verbs: ["list", "watch"]
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs: ["list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources:
+      - horizontalpodautoscalers
+    verbs: ["list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - ingresses
+      - networkpolicies
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kube-state-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-state-metrics
+subjects:
+  - kind: ServiceAccount
+    name: kube-state-metrics
+    namespace: metrics
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-state-metrics
+  namespace: metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kube-state-metrics
+  template:
+    metadata:
+      labels:
+        app: kube-state-metrics
+    spec:
+      serviceAccountName: kube-state-metrics
+      containers:
+        - name: kube-state-metrics
+          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.20.0
+          ports:
+            - name: metrics
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 8080
+            initialDelaySeconds: 5
+            timeoutSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-state-metrics
+  namespace: metrics
+spec:
+  type: ClusterIP
+  selector:
+    app: kube-state-metrics
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: 8080
+```
+
+### 9.4 Installation Commands
+
+Validate the manifest:
+
+```bash
+kubectl apply --dry-run=client \
+  -f kube-state-metrics/kube-state-metrics.yaml
+```
+
+Deploy kube-state-metrics:
+
+```bash
+kubectl apply \
+  -f kube-state-metrics/kube-state-metrics.yaml
+```
+
+### 9.5 Verification Commands
+
+Check the Deployment:
+
+```bash
+kubectl get deployment -n metrics
+```
+<img width="947" height="57" alt="image" src="https://github.com/user-attachments/assets/3fa4ded9-5d45-4682-933b-0211324aaa5b" />
+
+Check the Pod:
+
+```bash
+kubectl get pods -n metrics
+```
+<img width="943" height="112" alt="image" src="https://github.com/user-attachments/assets/da7430b5-602e-4dbb-a095-d613d0f87836" />
+
+Check the Service:
+
+```bash
+kubectl get service -n metrics
+```
+<img width="1002" height="59" alt="image" src="https://github.com/user-attachments/assets/a31cc843-789c-4e09-9aed-83cee9c7b001" />
+
+Check application logs:
+
+```bash
+kubectl logs -n metrics deployment/kube-state-metrics
+```
+<img width="1366" height="201" alt="image" src="https://github.com/user-attachments/assets/6ad46af5-7d30-464b-8775-d339d5cb54df" />
+
+### 9.6 Metrics Endpoint Verification
+
+Forward the Service port to the local machine:
+
+```bash
+kubectl port-forward \
+  -n metrics service/kube-state-metrics 8080:8080
+```
+
+Verify Pod information metrics:
+
+```bash
+curl -s http://localhost:8080/metrics | grep kube_pod_info
+```
+
+Verify Node information metrics:
+
+```bash
+curl -s http://localhost:8080/metrics | grep kube_node_info
+```
+
+### 9.7 Verification Results
+
+Kube-state-metrics was successfully deployed in the `metrics` namespace.
+
+| Component | Status |
+|---|---|
+| Deployment | 1/1 READY |
+| Pod | 1/1 Running |
+| Restart Count | 0 |
+| Service Type | ClusterIP |
+| Metrics Port | 8080 |
+| Kubernetes API Communication | Successful |
+| Node Metrics | Successfully exposed |
+
+The `kube_node_info` metric returned information for all three Kind cluster nodes:
+
+- `ha-observability-control-plane`
+- `ha-observability-worker`
+- `ha-observability-worker2`
+
+### 9.8 Role in the Observability Architecture
+
+Kube-state-metrics exposes Kubernetes object-state metrics. vmagent will scrape these metrics and send them to VictoriaMetrics for storage and querying through Grafana.
+

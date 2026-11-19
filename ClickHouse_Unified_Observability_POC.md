@@ -8,7 +8,7 @@ The objective of this Proof of Concept (POC) is to evaluate **ClickHouse as a ce
 - Metrics
 - Traces
 
-The POC will use a local Kubernetes environment powered by Kind. Three independent ingestion pipelines will collect logs, metrics, and traces and send them to ClickHouse for centralized storage and analysis.
+The POC uses a local Kubernetes environment powered by Kind. Three independent ingestion pipelines collect logs, metrics, and traces and send them to ClickHouse for centralized storage and analysis.
 
 Grafana will be used to visualize the collected observability data.
 
@@ -150,24 +150,24 @@ No separate Prometheus Server will be deployed. The OpenTelemetry Collector will
 
 ```text
        Order API
-            |
-            v
-   Payment Service
-            |
-            v
- OpenTelemetry SDK
-            |
-            v
-       OTLP
-            |
-            v
- OpenTelemetry Collector
+           |
+           v
+    Payment Service
+           |
+           v
+  OpenTelemetry SDK
+           |
+           v
+          OTLP
+           |
+           v
+  OpenTelemetry Collector
        (OTLP Receiver)
-            |
-            v
+           |
+           v
      ClickHouse Exporter
-            |
-            v
+           |
+           v
         ClickHouse
 ```
 
@@ -184,11 +184,11 @@ No separate Prometheus Server will be deployed. The OpenTelemetry Collector will
              ClickHouse
                   |
                   v
-               Grafana
+                Grafana
                   |
-          +-------+-------+
-          |       |       |
-         Logs   Metrics  Traces
+           +------+------+
+           |      |      |
+          Logs  Metrics Traces
 ```
 
 Grafana will be used to query and visualize the data stored in ClickHouse.
@@ -223,7 +223,7 @@ Grafana will be used to query and visualize the data stored in ClickHouse.
 
 ## 6. System Specifications
 
-The POC is planned for the following local environment.
+The POC is implemented in the following local environment.
 
 ### 6.1 Laptop Specifications
 
@@ -247,6 +247,7 @@ The POC is planned for the following local environment.
 | Helm | v4.3.0 |
 | System kubectl | v1.29.15 |
 | Project-local kubectl | v1.37.1 |
+| Kubernetes Node Image | v1.37.0 |
 
 ## 7. Project Setup and Directory Structure
 
@@ -275,6 +276,8 @@ clickhouse-unified-poc/
 ├── helm/
 │
 ├── kubernetes/
+│   ├── kind-config.yaml
+│   └── namespaces.yaml
 │
 └── README.md
 ```
@@ -334,65 +337,240 @@ kubectl: OK
 
 The project-local kubectl installation was completed successfully without changing the system-level kubectl version.
 
-## 9. Implementation Roadmap
+## 9. Kind Cluster Setup
 
-The following activities are planned for the POC.
+A separate single-node Kind cluster was created specifically for this POC.
+
+### 9.1 Cluster Details
+
+| Component | Configuration |
+|---|---|
+| Cluster Name | clickhouse-unified-poc |
+| Kubernetes Version | v1.37.0 |
+| Node Configuration | 1 Control Plane |
+| Node Image | kindest/node:v1.37.0 |
+| Cluster Type | Local Kubernetes Cluster |
+
+### 9.2 Kind Configuration File
+
+File location:
+
+```text
+kubernetes/kind-config.yaml
+```
+
+Configuration:
+
+```yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5
+```
+
+### 9.3 Cluster Creation
+
+```bash
+kind create cluster \
+  --name clickhouse-unified-poc \
+  --config kubernetes/kind-config.yaml
+```
+
+The cluster was created successfully.
+
+### 9.4 Cluster Validation
+
+Cluster information:
+
+```bash
+kubectl cluster-info \
+  --context kind-clickhouse-unified-poc
+```
+
+Node validation:
+
+```bash
+kubectl --context kind-clickhouse-unified-poc get nodes -o wide
+```
+
+Pod validation:
+
+```bash
+kubectl --context kind-clickhouse-unified-poc get pods -A
+```
+
+**Validation Results:**
+
+- Kubernetes API Server was accessible.
+- The control-plane node reached `Ready` status.
+- Kubernetes system pods were running.
+- CoreDNS was running.
+- Kind networking components were running.
+- Local Path Storage provisioner was running.
+
+### 9.5 StorageClass Validation
+
+Command:
+
+```bash
+kubectl --context kind-clickhouse-unified-poc get storageclass
+```
+
+Verified StorageClass:
+
+| Property | Value |
+|---|---|
+| StorageClass Name | standard |
+| Provisioner | rancher.io/local-path |
+| Reclaim Policy | Delete |
+| Volume Binding Mode | WaitForFirstConsumer |
+| Default StorageClass | Yes |
+| Volume Expansion | No |
+
+The default StorageClass is available for persistent volume provisioning.
+
+## 10. Kubernetes Namespace Setup
+
+Six separate namespaces were created to organize the POC components.
+
+### 10.1 Namespace Configuration
+
+File location:
+
+```text
+kubernetes/namespaces.yaml
+```
+
+Configuration:
+
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: clickhouse
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: metrics
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opentelemetry
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: applications
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+```
+
+### 10.2 Apply Namespaces
+
+```bash
+kubectl apply -f kubernetes/namespaces.yaml
+```
+
+### 10.3 Namespace Purpose
+
+| Namespace | Purpose |
+|---|---|
+| clickhouse | ClickHouse database and related components |
+| logging | Fluent Bit and logging components |
+| metrics | Metrics exporters |
+| opentelemetry | OpenTelemetry Collector |
+| applications | Demo applications |
+| monitoring | Grafana and monitoring components |
+
+### 10.4 Namespace Validation
+
+Command:
+
+```bash
+kubectl get namespaces
+```
+
+**Validation Result:**
+
+All six namespaces were successfully created and their status was verified as `Active`.
+
+## 11. Implementation Roadmap
 
 | No. | Task | Status |
 |---|---|---|
 | 1 | Create project workspace and directory structure | Completed |
 | 2 | Record system specifications | Completed |
 | 3 | Install project-local kubectl v1.37.1 | Completed |
-| 4 | Prepare Kind cluster configuration | Pending |
-| 5 | Create a separate single-node Kind cluster | Pending |
-| 6 | Create Kubernetes namespaces | Pending |
-| 7 | Deploy ClickHouse | Pending |
-| 8 | Configure Fluent Bit direct ClickHouse output | Pending |
-| 9 | Validate log ingestion | Pending |
-| 10 | Deploy Node Exporter, cAdvisor, and kube-state-metrics | Pending |
-| 11 | Configure OTel Collector Prometheus Receiver | Pending |
-| 12 | Validate metrics ingestion | Pending |
-| 13 | Develop Order API and Payment Service | Pending |
-| 14 | Instrument applications using OpenTelemetry SDK | Pending |
-| 15 | Configure OTel Collector OTLP Receiver | Pending |
-| 16 | Validate trace ingestion | Pending |
-| 17 | Deploy demo applications | Pending |
-| 18 | Install Grafana | Pending |
-| 19 | Configure ClickHouse datasource in Grafana | Pending |
-| 20 | Create observability dashboards | Pending |
-| 21 | Validate logs, metrics, and traces | Pending |
-| 22 | Validate cross-signal correlation | Pending |
-| 23 | Document POC results and findings | Pending |
+| 4 | Prepare Kind cluster configuration | Completed |
+| 5 | Create a separate single-node Kind cluster | Completed |
+| 6 | Validate Kubernetes node and system pods | Completed |
+| 7 | Validate default StorageClass | Completed |
+| 8 | Create Kubernetes namespaces | Completed |
+| 9 | Deploy ClickHouse Operator | Pending |
+| 10 | Deploy ClickHouse | Pending |
+| 11 | Configure Fluent Bit direct ClickHouse output | Pending |
+| 12 | Validate log ingestion | Pending |
+| 13 | Deploy Node Exporter, cAdvisor, and kube-state-metrics | Pending |
+| 14 | Configure OTel Collector Prometheus Receiver | Pending |
+| 15 | Validate metrics ingestion | Pending |
+| 16 | Develop Order API and Payment Service | Pending |
+| 17 | Instrument applications using OpenTelemetry SDK | Pending |
+| 18 | Configure OTel Collector OTLP Receiver | Pending |
+| 19 | Validate trace ingestion | Pending |
+| 20 | Deploy demo applications | Pending |
+| 21 | Install Grafana | Pending |
+| 22 | Configure ClickHouse datasource in Grafana | Pending |
+| 23 | Create observability dashboards | Pending |
+| 24 | Validate logs, metrics, and traces | Pending |
+| 25 | Validate cross-signal correlation | Pending |
+| 26 | Document POC results and findings | Pending |
 
-## 10. Validation Strategy
+## 12. Validation Strategy
 
 The following validations will be performed during implementation.
 
 ### Logs
+
 - Verify Fluent Bit collects Kubernetes container logs.
 - Verify logs reach ClickHouse directly.
 - Check stored log records using SQL queries.
 
 ### Metrics
+
 - Verify exporters expose metrics.
 - Verify OTel Collector successfully scrapes the endpoints.
 - Verify metrics are exported and stored in ClickHouse.
 - Query metrics from ClickHouse.
 
 ### Traces
+
 - Verify demo applications generate traces.
 - Verify traces reach the OTel Collector through OTLP.
 - Verify traces are exported and stored in ClickHouse.
 - Query trace records from ClickHouse.
 
 ### Visualization
+
 - Verify Grafana connects to ClickHouse.
 - Verify dashboards display logs, metrics, and traces.
 - Validate the available correlation fields between logs and traces.
 
-## 11. Current Project Status
+## 13. Current Project Status
 
 ### Completed
+
 - Project workspace created.
 - Required project directories created.
 - System specifications documented.
@@ -400,17 +578,27 @@ The following validations will be performed during implementation.
 - SHA256 checksum verified.
 - Project-local kubectl installed and version verified.
 - POC objectives, scope, and proposed architecture defined.
+- Kind cluster configuration prepared.
+- Separate single-node Kind cluster created successfully.
+- Kubernetes control-plane node verified as Ready.
+- Kubernetes system pods verified.
+- Default StorageClass verified.
+- Six Kubernetes namespaces created successfully.
+- All six namespaces verified as Active.
 
 ### Pending
-- Kind cluster configuration and creation.
-- ClickHouse deployment.
+
+- ClickHouse Operator installation.
+- ClickHouse deployment and database configuration.
 - Fluent Bit log ingestion pipeline.
 - Metrics exporters and OTel Collector configuration.
 - Demo microservices and distributed tracing pipeline.
 - Grafana deployment and dashboard creation.
 - End-to-end validation.
+- Cross-signal correlation testing.
+- Final POC documentation and findings.
 
-## 12. Expected Final Outcome
+## 14. Expected Final Outcome
 
 The final outcome will be a working local Kubernetes-based unified observability POC in which:
 

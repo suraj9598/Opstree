@@ -3463,3 +3463,1471 @@ Observed behavior:
 - Payment Service rejected the payment with HTTP 400.
 - The error type was `PAYMENT_DECLINED`.
 - Order API received the
+
+# Phase 5: Metrics Collection and Ingestion Using OpenTelemetry Collector
+
+## 59. Phase Overview
+
+The objective of Phase 5 is to collect infrastructure-level, Kubernetes-level, and application-level metrics and store them in ClickHouse.
+
+In this phase, OpenTelemetry Collector is used as the central metrics collection and processing component.
+
+The Prometheus Receiver inside the OpenTelemetry Collector periodically scrapes metrics from the configured Prometheus-compatible endpoints.
+
+The collected metrics are then exported directly to ClickHouse using the ClickHouse Exporter.
+
+### Objectives
+
+- Collect host-level metrics using Node Exporter.
+- Collect Kubernetes object metrics using kube-state-metrics.
+- Collect container-level metrics using cAdvisor.
+- Collect custom application metrics from Order API.
+- Collect custom application metrics from Payment Service.
+- Use OpenTelemetry Collector as the metrics collection component.
+- Store all collected metrics in ClickHouse.
+- Validate metrics ingestion and continuous updates.
+
+### Architecture Decision
+
+We are using:
+
+**Prometheus Receiver + OpenTelemetry Collector + ClickHouse**
+
+We are not deploying a separate Prometheus Server in this architecture.
+
+The Prometheus Receiver directly scrapes the configured endpoints and forwards metrics to ClickHouse.
+
+This reduces the number of components required for the POC.
+
+---
+
+## 60. Metrics Pipeline Architecture
+
+```text
+                    Kubernetes Cluster
+                 clickhouse-unified-poc
+                            |
+                            |
+             +--------------+--------------+
+             |              |              |
+             v              v              v
+       Node Exporter   kube-state-metrics  cAdvisor
+             |              |              |
+             |              |              |
+             +--------------+--------------+
+                            |
+                            |
+                      Prometheus
+                        Receiver
+                            |
+                            |
+                  OpenTelemetry Collector
+                     Namespace:
+                    opentelemetry
+                            |
+                            |
+                    ClickHouse Exporter
+                            |
+                            |
+                            v
+                       ClickHouse
+                       Namespace:
+                       clickhouse
+                            |
+                            v
+                      observability
+                            |
+                 +----------+----------+
+                 |          |          |
+                 v          v          v
+            Gauge Table  Sum Table  Histogram Table
+                 ^
+                 |
+        +--------+---------+
+        |                  |
+        v                  v
+     Order API        Payment Service
+      /metrics           /metrics
+```
+
+### Metrics Sources
+
+| Component | Metrics Type | Purpose |
+|---|---|---|
+| Node Exporter | Infrastructure metrics | CPU, memory, filesystem, network |
+| kube-state-metrics | Kubernetes metrics | Pod, deployment, node and resource states |
+| cAdvisor | Container metrics | Container CPU, memory and filesystem usage |
+| Order API | Application metrics | Order count and request duration |
+| Payment Service | Application metrics | Payment count and request duration |
+
+### Data Flow
+
+1. Each metrics source exposes a Prometheus-compatible `/metrics` endpoint or equivalent endpoint.
+2. OpenTelemetry Collector's Prometheus Receiver scrapes these endpoints.
+3. The Collector processes metrics using configured processors.
+4. The ClickHouse Exporter sends metrics to ClickHouse.
+5. ClickHouse stores metrics in the `observability` database.
+
+**Important:** Fluent Bit continues to handle Kubernetes logs separately. This metrics pipeline does not route logs through Fluent Bit or the Prometheus Server.
+
+---
+
+## 61. Namespace and Component Details
+
+The following namespaces are used:
+
+| Namespace | Component |
+|---|---|
+| metrics | Node Exporter and kube-state-metrics |
+| applications | Order API and Payment Service |
+| opentelemetry | OpenTelemetry Collector |
+| clickhouse | ClickHouse database |
+
+### OpenTelemetry Collector Details
+
+| Configuration | Value |
+|---|---|
+| Helm Release | otel-collector |
+| Helm Chart | open-telemetry/opentelemetry-collector |
+| Chart Version | 0.178.3 |
+| Collector Image | otel/opentelemetry-collector-contrib |
+| Collector Version | 0.163.2 |
+| Namespace | opentelemetry |
+| Deployment Mode | deployment |
+| Replicas | 1 |
+| Service Account | otel-collector |
+
+---
+
+## 62. OpenTelemetry Collector RBAC Configuration
+
+The Collector needs permission to access the Kubernetes API Server's node proxy endpoint to scrape cAdvisor metrics.
+
+The cAdvisor endpoint is accessed through the Kubernetes API Server:
+
+```text
+/api/v1/nodes/<node-name>/proxy/metrics/cadvisor
+```
+
+To access this endpoint, the Collector's ServiceAccount requires appropriate RBAC permissions.
+
+### File: configs/otel-collector-rbac.yaml
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: otel-collector-cadvisor
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+
+  - apiGroups: [""]
+    resources: [nodes/proxy]
+    verbs: [get]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: otel-collector-cadvisor
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector
+    namespace: opentelemetry
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otel-collector-cadvisor
+```
+
+### Explanation of RBAC YAML
+
+#### 1. apiVersion
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+```
+
+Specifies the Kubernetes RBAC API version used to create ClusterRole and ClusterRoleBinding resources.
+
+#### 2. kind: ClusterRole
+
+```yaml
+kind: ClusterRole
+```
+
+A ClusterRole defines permissions at the cluster level.
+
+Unlike Role, which is namespace-scoped, ClusterRole can grant access to cluster-scoped resources such as Nodes.
+
+#### 3. metadata.name
+
+```yaml
+metadata:
+  name: otel-collector-cadvisor
+```
+
+Defines the name of the ClusterRole.
+
+#### 4. rules
+
+```yaml
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+```
+
+The empty API group represents the Kubernetes Core API group.
+
+The Collector receives permission to:
+
+- get: Retrieve an individual Node.
+- list: List Nodes.
+- watch: Watch Node changes.
+
+#### 5. nodes/proxy permission
+
+```yaml
+- apiGroups: [""]
+  resources: [nodes/proxy]
+  verbs: [get]
+```
+
+This permission allows the Collector to access the Node proxy API endpoint.
+
+It is required for accessing cAdvisor metrics through the Kubernetes API Server proxy.
+
+#### 6. ClusterRoleBinding
+
+```yaml
+kind: ClusterRoleBinding
+```
+
+ClusterRoleBinding connects a ClusterRole with a user, group, or ServiceAccount.
+
+#### 7. subjects
+
+```yaml
+subjects:
+  - kind: ServiceAccount
+    name: otel-collector
+    namespace: opentelemetry
+```
+
+This specifies which ServiceAccount receives the permissions.
+
+In our setup:
+
+- ServiceAccount: otel-collector
+- Namespace: opentelemetry
+
+#### 8. roleRef
+
+```yaml
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: otel-collector-cadvisor
+```
+
+This references the ClusterRole containing the permissions.
+
+### Apply RBAC Configuration
+
+```bash
+kubectl apply -f configs/otel-collector-rbac.yaml
+```
+
+### Verify RBAC Permissions
+
+```bash
+kubectl auth can-i get nodes/proxy \
+  --as=system:serviceaccount:opentelemetry:otel-collector
+```
+
+Expected output:
+
+```text
+yes
+```
+
+This confirms that the Collector ServiceAccount has permission to access the Node proxy endpoint.
+
+---
+
+## 63. OpenTelemetry Collector Helm Values Configuration
+
+The OpenTelemetry Collector is deployed using the official OpenTelemetry Helm chart.
+
+### File: configs/otel-collector-values.yaml
+
+```yaml
+mode: deployment
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+  tag: "0.163.2"
+  pullPolicy: IfNotPresent
+
+command:
+  name: otelcol-contrib
+
+replicaCount: 1
+
+serviceAccount:
+  create: true
+  name: otel-collector
+  automountServiceAccountToken: true
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+config:
+  exporters:
+    debug: {}
+
+    clickhouse:
+      endpoint: tcp://clickhouse-clickhouse-headless.clickhouse.svc.cluster.local:9000?dial_timeout=10s&compress=lz4
+      database: observability
+      username: default
+      create_schema: true
+      async_insert: true
+      timeout: 5s
+
+  receivers:
+    prometheus:
+      config:
+        scrape_configs:
+
+          - job_name: node-exporter
+            scrape_interval: 30s
+            static_configs:
+              - targets:
+                  - node-exporter-prometheus-node-exporter.metrics.svc.cluster.local:9100
+
+          - job_name: kube-state-metrics
+            scrape_interval: 30s
+            static_configs:
+              - targets:
+                  - kube-state-metrics.metrics.svc.cluster.local:8080
+
+          - job_name: order-api
+            scrape_interval: 15s
+            metrics_path: /metrics
+            static_configs:
+              - targets:
+                  - order-api.applications.svc.cluster.local:8000
+
+          - job_name: payment-service
+            scrape_interval: 15s
+            metrics_path: /metrics
+            static_configs:
+              - targets:
+                  - payment-service.applications.svc.cluster.local:8001
+
+          - job_name: cadvisor
+            scrape_interval: 30s
+            scheme: https
+            metrics_path: /api/v1/nodes/clickhouse-unified-poc-control-plane/proxy/metrics/cadvisor
+            bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+            tls_config:
+              ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              server_name: kubernetes.default.svc
+            static_configs:
+              - targets:
+                  - kubernetes.default.svc.cluster.local:443
+
+  service:
+    pipelines:
+      metrics:
+        receivers:
+          - otlp
+          - prometheus
+        processors:
+          - memory_limiter
+          - batch
+        exporters:
+          - clickhouse
+
+      logs:
+        receivers:
+          - otlp
+        processors:
+          - memory_limiter
+          - batch
+        exporters:
+          - debug
+
+      traces:
+        receivers:
+          - otlp
+          - jaeger
+          - zipkin
+        processors:
+          - memory_limiter
+          - batch
+        exporters:
+          - debug
+```
+
+---
+
+## 64. Explanation of OpenTelemetry Collector YAML
+
+### 64.1 Deployment Mode
+
+```yaml
+mode: deployment
+```
+
+The Collector runs as a Kubernetes Deployment.
+
+In this POC, we use one Collector replica.
+
+A Deployment is appropriate here because the Collector acts as a central metrics collection service.
+
+It is different from DaemonSet mode, where an instance runs on each Kubernetes node.
+
+### 64.2 Image Configuration
+
+```yaml
+image:
+  repository: otel/opentelemetry-collector-contrib
+  tag: "0.163.2"
+  pullPolicy: IfNotPresent
+```
+
+- repository: Specifies the Collector Contrib Docker image.
+- tag: Specifies the Collector version.
+- pullPolicy: IfNotPresent means Kubernetes uses the local image if it is already available.
+
+The Contrib distribution is used because it contains additional receivers and exporters, including the Prometheus Receiver and ClickHouse Exporter.
+
+### 64.3 Command Configuration
+
+```yaml
+command:
+  name: otelcol-contrib
+```
+
+Specifies the Collector executable.
+
+The Contrib image uses `otelcol-contrib`.
+
+### 64.4 Replica Count
+
+```yaml
+replicaCount: 1
+```
+
+Runs one Collector replica.
+
+This is sufficient for the current single-node POC.
+
+For production environments, Collector replicas and workload distribution should be planned according to availability and throughput requirements.
+
+### 64.5 ServiceAccount Configuration
+
+```yaml
+serviceAccount:
+  create: true
+  name: otel-collector
+  automountServiceAccountToken: true
+```
+
+- create: true creates the ServiceAccount through Helm.
+- name: Defines the ServiceAccount name.
+- automountServiceAccountToken: true mounts the ServiceAccount token inside the Collector Pod.
+
+The token is required to authenticate requests to the Kubernetes API Server.
+
+The Collector uses this token to access the cAdvisor proxy endpoint.
+
+### 64.6 Resource Requests and Limits
+
+```yaml
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+```
+
+Requests define the minimum resources Kubernetes reserves for the container.
+
+Limits define the maximum resources the container can consume.
+
+| Resource | Request | Limit |
+|---|---:|---:|
+| CPU | 100m | 500m |
+| Memory | 256Mi | 512Mi |
+
+CPU `100m` means 0.1 CPU core.
+
+Memory is configured in MiB.
+
+These are POC resource values and should be reviewed under production load.
+
+---
+
+## 65. Exporter Configuration
+
+The exporter sends collected metrics to ClickHouse.
+
+```yaml
+exporters:
+  debug: {}
+
+  clickhouse:
+    endpoint: tcp://clickhouse-clickhouse-headless.clickhouse.svc.cluster.local:9000?dial_timeout=10s&compress=lz4
+    database: observability
+    username: default
+    create_schema: true
+    async_insert: true
+    timeout: 5s
+```
+
+### Explanation
+
+#### ClickHouse Endpoint
+
+```yaml
+endpoint: tcp://clickhouse-clickhouse-headless.clickhouse.svc.cluster.local:9000?dial_timeout=10s&compress=lz4
+```
+
+This is the internal Kubernetes DNS address of ClickHouse.
+
+Breakdown:
+
+- clickhouse-clickhouse-headless: Kubernetes Service name.
+- clickhouse: Namespace.
+- svc.cluster.local: Internal Kubernetes DNS suffix.
+- 9000: ClickHouse native TCP protocol port.
+- dial_timeout=10s: Connection establishment timeout.
+- compress=lz4: Enables LZ4 compression.
+
+The Collector connects to ClickHouse using the native TCP protocol.
+
+#### Database
+
+```yaml
+database: observability
+```
+
+All exported metrics are stored in the observability database.
+
+#### Username
+
+```yaml
+username: default
+```
+
+Uses the default ClickHouse user.
+
+No password is configured in this POC.
+
+For production, use a dedicated ClickHouse user with appropriate permissions and secure credential management.
+
+#### create_schema
+
+```yaml
+create_schema: true
+```
+
+Allows the ClickHouse Exporter to create the required metrics tables if they do not already exist.
+
+This is why the following tables appeared after deploying the Collector:
+
+- otel_metrics_gauge
+- otel_metrics_sum
+- otel_metrics_histogram
+- otel_metrics_summary
+- otel_metrics_exponential_histogram
+
+#### async_insert
+
+```yaml
+async_insert: true
+```
+
+Enables asynchronous inserts.
+
+ClickHouse can buffer insert requests and process them asynchronously.
+
+This can improve ingestion efficiency by reducing the overhead of processing many small insert requests.
+
+#### timeout
+
+```yaml
+timeout: 5s
+```
+
+Defines the exporter operation timeout.
+
+---
+
+## 66. Prometheus Receiver Configuration
+
+The Prometheus Receiver scrapes metrics from Prometheus-compatible endpoints.
+
+```yaml
+receivers:
+  prometheus:
+    config:
+      scrape_configs:
+```
+
+The `scrape_configs` section defines which endpoints should be scraped and how frequently.
+
+### 66.1 Node Exporter Scrape Configuration
+
+```yaml
+- job_name: node-exporter
+  scrape_interval: 30s
+  static_configs:
+    - targets:
+        - node-exporter-prometheus-node-exporter.metrics.svc.cluster.local:9100
+```
+
+Explanation:
+
+- job_name: Identifies the scrape job.
+- scrape_interval: Collects metrics every 30 seconds.
+- static_configs: Defines static scrape targets.
+- target: Node Exporter Kubernetes Service.
+
+Node Exporter provides host-level metrics.
+
+Examples:
+
+- CPU utilization
+- Memory usage
+- Filesystem usage
+- Network traffic
+- Disk statistics
+
+### 66.2 kube-state-metrics Scrape Configuration
+
+```yaml
+- job_name: kube-state-metrics
+  scrape_interval: 30s
+  static_configs:
+    - targets:
+        - kube-state-metrics.metrics.svc.cluster.local:8080
+```
+
+kube-state-metrics exposes metrics about Kubernetes API objects.
+
+Examples:
+
+- Pod status
+- Deployment replica status
+- Node readiness
+- Container restart information
+- Kubernetes resource requests and limits
+
+These metrics help understand the current state of Kubernetes resources.
+
+### 66.3 Order API Scrape Configuration
+
+```yaml
+- job_name: order-api
+  scrape_interval: 15s
+  metrics_path: /metrics
+  static_configs:
+    - targets:
+        - order-api.applications.svc.cluster.local:8000
+```
+
+The Collector scrapes Order API metrics every 15 seconds.
+
+The metrics endpoint is:
+
+```text
+http://order-api.applications.svc.cluster.local:8000/metrics
+```
+
+Custom application metrics include:
+
+- orders_created_total
+- order_request_duration_seconds
+
+These metrics help monitor application activity and request performance.
+
+### 66.4 Payment Service Scrape Configuration
+
+```yaml
+- job_name: payment-service
+  scrape_interval: 15s
+  metrics_path: /metrics
+  static_configs:
+    - targets:
+        - payment-service.applications.svc.cluster.local:8001
+```
+
+The Collector scrapes Payment Service metrics every 15 seconds.
+
+The metrics endpoint is:
+
+```text
+http://payment-service.applications.svc.cluster.local:8001/metrics
+```
+
+Custom metrics include:
+
+- payments_processed_total
+- payment_request_duration_seconds
+
+These metrics help monitor payment processing activity and application performance.
+
+### 66.5 cAdvisor Scrape Configuration
+
+```yaml
+- job_name: cadvisor
+  scrape_interval: 30s
+  scheme: https
+  metrics_path: /api/v1/nodes/clickhouse-unified-poc-control-plane/proxy/metrics/cadvisor
+  bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+  tls_config:
+    ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+    server_name: kubernetes.default.svc
+  static_configs:
+    - targets:
+        - kubernetes.default.svc.cluster.local:443
+```
+
+cAdvisor exposes container-level resource metrics.
+
+In this POC, cAdvisor metrics are accessed through the Kubernetes API Server proxy rather than a separately exposed cAdvisor Service.
+
+#### scheme: https
+
+Uses HTTPS to connect to the Kubernetes API Server.
+
+#### metrics_path
+
+Specifies the Kubernetes Node proxy endpoint.
+
+The node name in the path is:
+
+```text
+clickhouse-unified-poc-control-plane
+```
+
+#### bearer_token_file
+
+```yaml
+bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+```
+
+Reads the mounted ServiceAccount token.
+
+The token authenticates the Collector with the Kubernetes API Server.
+
+#### tls_config
+
+```yaml
+tls_config:
+  ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+  server_name: kubernetes.default.svc
+```
+
+- ca_file: Provides the Kubernetes API Server CA certificate.
+- server_name: Defines the expected TLS server name.
+
+#### static_configs
+
+```yaml
+static_configs:
+  - targets:
+      - kubernetes.default.svc.cluster.local:443
+```
+
+The target is the internal Kubernetes API Server Service.
+
+---
+
+## 67. Processor Configuration
+
+The metrics pipeline uses two processors:
+
+```yaml
+processors:
+  - memory_limiter
+  - batch
+```
+
+### memory_limiter
+
+The memory_limiter processor protects the Collector from consuming excessive memory.
+
+It helps control memory usage under ingestion pressure.
+
+### batch
+
+The batch processor groups telemetry data into batches before export.
+
+Batching can reduce the number of export requests and improve ingestion efficiency.
+
+The current configuration uses the chart's processor defaults.
+
+---
+
+## 68. Service Pipeline Configuration
+
+OpenTelemetry Collector uses pipelines to connect receivers, processors, and exporters.
+
+A pipeline has three major components:
+
+```text
+Receiver -> Processor -> Exporter
+```
+
+### 68.1 Metrics Pipeline
+
+```yaml
+metrics:
+  receivers:
+    - otlp
+    - prometheus
+  processors:
+    - memory_limiter
+    - batch
+  exporters:
+    - clickhouse
+```
+
+The metrics pipeline accepts:
+
+- OTLP metrics.
+- Prometheus scraped metrics.
+
+It processes them using memory_limiter and batch processors and exports them to ClickHouse.
+
+The Prometheus Receiver is responsible for the five scrape jobs configured in this POC.
+
+### 68.2 Logs Pipeline
+
+```yaml
+logs:
+  receivers:
+    - otlp
+  processors:
+    - memory_limiter
+    - batch
+  exporters:
+    - debug
+```
+
+The logs pipeline accepts OTLP logs and sends them to the debug exporter.
+
+This is not the primary logs ingestion path in our architecture.
+
+Fluent Bit continues to send Kubernetes logs directly to ClickHouse.
+
+### 68.3 Traces Pipeline
+
+```yaml
+traces:
+  receivers:
+    - otlp
+    - jaeger
+    - zipkin
+  processors:
+    - memory_limiter
+    - batch
+  exporters:
+    - debug
+```
+
+The traces pipeline accepts OTLP, Jaeger and Zipkin trace data and sends it to the debug exporter.
+
+Trace ingestion into ClickHouse is not implemented in this phase.
+
+It will be handled in the distributed tracing phase.
+
+---
+
+## 69. Helm Installation
+
+### 69.1 Add OpenTelemetry Helm Repository
+
+```bash
+helm repo add open-telemetry \
+  https://open-telemetry.github.io/opentelemetry-helm-charts
+```
+
+This adds the official OpenTelemetry Helm repository.
+
+### 69.2 Update Helm Repository
+
+```bash
+helm repo update
+```
+
+Downloads the latest repository metadata.
+
+### 69.3 Verify Chart Version
+
+```bash
+helm search repo open-telemetry/opentelemetry-collector --versions
+```
+
+The chart version used in this POC:
+
+```text
+0.178.3
+```
+
+### 69.4 Apply RBAC
+
+```bash
+kubectl apply -f configs/otel-collector-rbac.yaml
+```
+
+### 69.5 Install OpenTelemetry Collector
+
+```bash
+helm upgrade --install otel-collector \
+  open-telemetry/opentelemetry-collector \
+  --namespace opentelemetry \
+  --version 0.178.3 \
+  -f configs/otel-collector-values.yaml \
+  --wait \
+  --timeout 5m
+```
+
+Explanation:
+
+- upgrade --install: Installs the release if it does not exist, otherwise upgrades it.
+- otel-collector: Helm release name.
+- open-telemetry/opentelemetry-collector: Chart name.
+- --namespace: Target Kubernetes namespace.
+- --version: Helm chart version.
+- -f: Uses our custom values YAML.
+- --wait: Waits for Kubernetes resources to become ready.
+- --timeout: Sets the maximum wait time.
+
+### 69.6 Verify Helm Release
+
+```bash
+helm list -n opentelemetry
+```
+
+Expected release:
+
+```text
+otel-collector
+```
+
+### 69.7 Verify Collector Pod
+
+```bash
+kubectl get pods -n opentelemetry
+```
+
+Expected status:
+
+```text
+1/1 Running
+```
+
+### 69.8 Verify Deployment
+
+```bash
+kubectl get deployment -n opentelemetry
+```
+
+Expected:
+
+```text
+READY   UP-TO-DATE   AVAILABLE
+1/1     1            1
+```
+
+### 69.9 Verify Collector Service
+
+```bash
+kubectl get svc -n opentelemetry
+```
+
+The Collector Service exposes OTLP and other configured receiver ports.
+
+Important OTLP ports:
+
+| Port | Protocol | Purpose |
+|---|---|---|
+| 4317 | TCP | OTLP gRPC |
+| 4318 | TCP | OTLP HTTP |
+
+The Prometheus Receiver is used internally by the Collector to scrape configured targets.
+
+---
+
+## 70. Collector Logs Validation
+
+Check Collector logs:
+
+```bash
+kubectl logs -n opentelemetry \
+  deployment/otel-collector-opentelemetry-collector \
+  --since=10m
+```
+
+The initial startup logs confirmed:
+
+- Collector started successfully.
+- Prometheus Receiver started.
+- Node Exporter scrape job was registered.
+- kube-state-metrics scrape job was registered.
+- Order API scrape job was registered.
+- Payment Service scrape job was registered.
+- cAdvisor scrape job was registered.
+- OTLP gRPC and HTTP receivers started.
+- Health check extension became ready.
+- Collector reported that it was ready to process data.
+
+### Check Error Logs
+
+```bash
+kubectl logs -n opentelemetry \
+  deployment/otel-collector-opentelemetry-collector \
+  --since=10m | grep -iE 'error|failed|retry|refused|timeout'
+```
+
+During the POC validation, this command returned no matching lines.
+
+This indicates that no log lines matching these keywords were found in the checked interval. It does not independently prove that every scrape and export operation succeeded; ClickHouse data queries provide the ingestion evidence.
+
+---
+
+## 71. ClickHouse Metrics Tables
+
+The ClickHouse Exporter automatically created the metrics tables because:
+
+```yaml
+create_schema: true
+```
+
+Database:
+
+```text
+observability
+```
+
+Tables:
+
+```text
+otel_metrics_exponential_histogram
+otel_metrics_gauge
+otel_metrics_histogram
+otel_metrics_sum
+otel_metrics_summary
+```
+
+### Verify Tables
+
+```bash
+kubectl exec -n clickhouse clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --query "SHOW TABLES FROM observability"
+```
+
+### Metrics Table Description
+
+| Table | Purpose |
+|---|---|
+| otel_metrics_gauge | Stores gauge metric data |
+| otel_metrics_sum | Stores sum/counter metric data |
+| otel_metrics_histogram | Stores histogram metric data |
+| otel_metrics_summary | Stores summary metric data |
+| otel_metrics_exponential_histogram | Stores exponential histogram data |
+
+### Gauge Metrics
+
+Gauge metrics represent values at a particular point in time.
+
+Examples:
+
+- CPU utilization
+- Memory usage
+- Filesystem availability
+- Current resource utilization
+
+### Sum Metrics
+
+Sum metrics represent accumulated values over time.
+
+Examples:
+
+- Total orders created
+- Total payments processed
+- Total network bytes
+- Total CPU time
+
+### Histogram Metrics
+
+Histograms represent the distribution of observations.
+
+They are useful for understanding request latency and other measurements.
+
+### Summary Metrics
+
+Summary metrics represent statistical distributions calculated by the instrumentation producing them.
+
+### Exponential Histogram
+
+This is another histogram representation that uses exponential bucket structures.
+
+No exponential histogram records were observed in this POC validation.
+
+---
+
+## 72. Verify Metrics Record Counts
+
+Run:
+
+```bash
+kubectl exec -n clickhouse clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --query "
+SELECT
+    name,
+    total_rows
+FROM system.tables
+WHERE database = 'observability'
+  AND name LIKE 'otel_metrics_%'
+ORDER BY name
+"
+```
+
+### Observed POC Results
+
+| Table | Approximate rows |
+|---|---:|
+| otel_metrics_exponential_histogram | 0 |
+| otel_metrics_gauge | 46,447 |
+| otel_metrics_histogram | 40 |
+| otel_metrics_sum | 28,697 |
+| otel_metrics_summary | 10 |
+
+Note: `system.tables.total_rows` is metadata and may be approximate for MergeTree tables.
+
+---
+
+## 73. Inspect Actual Gauge Metric Records
+
+Command:
+
+```bash
+kubectl exec -n clickhouse clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --query "
+SELECT *
+FROM observability.otel_metrics_gauge
+LIMIT 5
+FORMAT Vertical
+"
+```
+
+The returned records contained fields such as:
+
+- ResourceAttributes
+- ScopeName
+- ScopeVersion
+- ServiceName
+- MetricName
+- MetricDescription
+- Attributes
+- TimeUnix
+- Value
+
+### Observed cAdvisor Record
+
+```text
+ServiceName: cadvisor
+MetricName: cadvisor_version_info
+Value: 1
+```
+
+This confirmed that cAdvisor metrics were being stored in ClickHouse.
+
+The record also contained resource attributes identifying the Kubernetes API Server endpoint.
+
+---
+
+## 74. Verify Gauge Metrics by Service
+
+Command:
+
+```bash
+kubectl exec -n clickhouse clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --query "
+SELECT
+    ServiceName,
+    count() AS total_records,
+    uniqExact(MetricName) AS unique_metrics
+FROM observability.otel_metrics_gauge
+GROUP BY ServiceName
+ORDER BY ServiceName
+"
+```
+
+### Observed Results
+
+| Service | Total records | Unique metrics |
+|---|---:|---:|
+| cadvisor | 26,698 | 50 |
+| kube-state-metrics | 21,892 | 153 |
+| node-exporter | 11,329 | 270 |
+| order-api | 364 | 13 |
+| payment-service | 392 | 13 |
+
+All five configured services had gauge metrics stored in ClickHouse.
+
+---
+
+## 75. Verify Sum Metrics by Service
+
+Command:
+
+```bash
+kubectl exec -n clickhouse clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --query "
+SELECT
+    ServiceName,
+    count() AS total_records,
+    uniqExact(MetricName) AS unique_metrics
+FROM observability.otel_metrics_sum
+GROUP BY ServiceName
+ORDER BY ServiceName
+"
+```
+
+### Observed Results
+
+| Service | Total records | Unique metrics |
+|---|---:|---:|
+| cadvisor | 33,232 | 44 |
+| kube-state-metrics | 345 | 1 |
+| node-exporter | 8,256 | 69 |
+| order-api | 341 | 5 |
+| payment-service | 372 | 5 |
+
+All five services also had sum metrics stored in ClickHouse.
+
+---
+
+## 76. Verify Application Custom Counters
+
+The Order API and Payment Service expose custom application metrics.
+
+### Order API Counter
+
+```text
+orders_created_total
+```
+
+### Payment Service Counter
+
+```text
+payments_processed_total
+```
+
+Query:
+
+```bash
+kubectl exec -n clickhouse clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --query "
+SELECT
+    ServiceName,
+    MetricName,
+    count() AS records,
+    sum(Value) AS total_value
+FROM observability.otel_metrics_sum
+WHERE MetricName IN (
+    'orders_created_total',
+    'payments_processed_total'
+)
+GROUP BY ServiceName, MetricName
+ORDER BY ServiceName, MetricName
+"
+```
+
+### Observed Results
+
+| Service | Metric | Records | Sum of values |
+|---|---|---:|---:|
+| order-api | orders_created_total | 34 | 68 |
+| payment-service | payments_processed_total | 68 | 68 |
+
+Both custom counters were successfully found in ClickHouse.
+
+**Important:** The sum of stored counter samples is not the actual number of unique orders or payments. Counters are cumulative, so their samples must not be added together to calculate the final business total.
+
+### Check Latest Counter Values
+
+```bash
+kubectl exec -n clickhouse clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --query "
+SELECT
+    ServiceName,
+    MetricName,
+    max(TimeUnix) AS latest_timestamp,
+    argMax(Value, TimeUnix) AS latest_value
+FROM observability.otel_metrics_sum
+WHERE MetricName IN (
+    'orders_created_total',
+    'payments_processed_total'
+)
+GROUP BY ServiceName, MetricName
+ORDER BY ServiceName
+"
+```
+
+### Observed Results
+
+| Service | Metric | Latest value |
+|---|---|---:|
+| order-api | orders_created_total | 2 |
+| payment-service | payments_processed_total | 1 |
+
+The latest samples confirmed that both application counters were being scraped and stored.
+
+---
+
+## 77. Validate Recent Metrics Ingestion
+
+To confirm that metrics are being updated continuously, query records from the last five minutes.
+
+Command:
+
+```bash
+kubectl exec -n clickhouse clickhouse-clickhouse-0-0-0 -- \
+  clickhouse-client --query "
+SELECT
+    ServiceName,
+    count() AS recent_records,
+    uniqExact(MetricName) AS unique_metrics,
+    max(TimeUnix) AS latest_timestamp
+FROM observability.otel_metrics_gauge
+WHERE TimeUnix >= now() - INTERVAL 5 MINUTE
+GROUP BY ServiceName
+ORDER BY ServiceName
+"
+```
+
+### Observed Results
+
+| Service | Recent records | Unique metrics |
+|---|---:|---:|
+| cadvisor | 18,882 | 50 |
+| kube-state-metrics | 16,840 | 153 |
+| node-exporter | 8,108 | 270 |
+| order-api | 260 | 13 |
+| payment-service | 280 | 13 |
+| **Total** | **44,370** | — |
+
+All five services had recent records within the five-minute window.
+
+This validates that the metrics pipeline was actively receiving data during the test.
+
+---
+
+## 78. Final Phase 5 Validation
+
+### Validation Summary
+
+| Validation Item | Status |
+|---|---|
+| OpenTelemetry Collector Helm installation | Successful |
+| Collector Deployment | Running |
+| Collector ServiceAccount | Created |
+| Kubernetes RBAC | Verified |
+| Prometheus Receiver | Working |
+| Node Exporter scraping | Verified |
+| kube-state-metrics scraping | Verified |
+| cAdvisor scraping | Verified |
+| Order API scraping | Verified |
+| Payment Service scraping | Verified |
+| ClickHouse exporter schema creation | Verified |
+| Gauge metrics ingestion | Verified |
+| Sum metrics ingestion | Verified |
+| Histogram records | Present |
+| Summary records | Present |
+| Application custom counters | Verified |
+| Recent metrics ingestion | Verified |
+| Collector error keyword check | No matching lines |
+
+### Phase 5 Conclusion
+
+The metrics ingestion pipeline has been successfully deployed and validated in the local Kind Kubernetes cluster.
+
+The OpenTelemetry Collector uses the Prometheus Receiver to scrape infrastructure, Kubernetes, container, and application metrics.
+
+The collected metrics are exported directly to ClickHouse using the ClickHouse Exporter.
+
+The following five sources have been verified:
+
+1. Node Exporter
+2. kube-state-metrics
+3. cAdvisor
+4. Order API
+5. Payment Service
+
+Gauge and sum metrics were verified in ClickHouse, and the custom application counters were also found.
+
+The five-minute ingestion query confirmed that all five sources continued producing recent metrics.
+
+**Phase 5 core metrics ingestion validation is complete.**
+
+---
+
+## 79. Current Architecture Status and Next Phase
+
+The POC now has three planned telemetry pipelines:
+
+| Pipeline | Current implementation | Status |
+|---|---|---|
+| Logs | Fluent Bit → ClickHouse | Implemented and validated |
+| Metrics | Prometheus Receiver → OTel Collector → ClickHouse | Core ingestion validated |
+| Traces | Application OTLP → OTel Collector → ClickHouse | Pending |
+
+### Next Phase: Distributed Tracing
+
+The next phase will focus on collecting distributed traces from Order API and Payment Service.
+
+Planned activities:
+
+- Configure OTLP endpoint in application deployments.
+- Configure OpenTelemetry SDK trace export.
+- Send traces to the OTel Collector.
+- Configure ClickHouse trace exporter.
+- Create and validate trace storage schema.
+- Verify trace IDs and span IDs across services.
+- Correlate traces with existing application logs using trace_id.
+
+The final objective is to provide a unified observability backend using ClickHouse for logs, metrics, and traces.
+
+---
+
+## 80. Important POC Limitations
+
+The following limitations should be considered when interpreting the results:
+
+1. The current setup uses one OpenTelemetry Collector replica.
+2. The Kind cluster currently uses a single Kubernetes node.
+3. cAdvisor is accessed using a node-specific Kubernetes API proxy path.
+4. Collector logs and traces pipelines currently use the debug exporter; they are not yet configured to export logs or traces to ClickHouse.
+5. Fluent Bit remains responsible for Kubernetes log ingestion.
+6. Production-level high availability, scaling, retention, authentication, TLS hardening, and performance testing are outside the completed scope of this phase.
+7. The current resource requests and limits are POC settings and require load testing before production use.
+
+**End of Phase 5 — Metrics Collection and Ingestion Using OpenTelemetry Collector.**

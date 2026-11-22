@@ -2900,3 +2900,566 @@ The validation will include:
 - Correlating logs using Trace ID.
 
 **Current Milestone:** ClickHouse infrastructure, observability schema preparation, and demo microservice deployment have been completed. Both application workflows and distributed trace context propagation have been validated. The next milestone is to establish and validate the Fluent Bit-to-ClickHouse logs pipeline.
+
+# PHASE 4: Fluent Bit Integration and ClickHouse Log Ingestion
+
+## 44. Phase 4 Overview
+
+The objective of Phase 4 was to implement the Kubernetes log collection pipeline using Fluent Bit and send container logs directly to ClickHouse.
+
+This phase focused on:
+
+1. Configuring Fluent Bit to collect Kubernetes container logs.
+2. Enriching logs with Kubernetes metadata.
+3. Transforming log records using a custom Lua script.
+4. Sending transformed logs directly to ClickHouse.
+5. Validating log ingestion for infrastructure and application workloads.
+6. Verifying structured application logs and error logs.
+7. Validating trace ID and span ID correlation across microservices.
+
+At the end of this phase, Fluent Bit was successfully deployed as a DaemonSet, and Kubernetes container logs were being ingested into ClickHouse.
+
+## 45. Logging Pipeline Architecture
+
+The following architecture was implemented for log ingestion:
+
+```text
+        Kubernetes Workloads
+                 |
+                 v
+        Container stdout/stderr
+                 |
+                 v
+          Fluent Bit Agent
+             (DaemonSet)
+                 |
+                 v
+          Tail Input Plugin
+                 |
+                 v
+       Kubernetes Filter Plugin
+                 |
+                 v
+          Lua Transformation
+                 |
+                 v
+          HTTP Output Plugin
+                 |
+                 v
+             ClickHouse
+                 |
+                 v
+ observability.kubernetes_logs
+```
+
+### Workflow
+
+- Kubernetes workloads generate container logs through stdout and stderr.
+- Fluent Bit collects container log files from Kubernetes nodes.
+- The Kubernetes filter enriches logs with namespace, pod, and container metadata.
+- The Lua script transforms log records into the required ClickHouse table structure.
+- The HTTP output plugin sends transformed records directly to ClickHouse.
+- ClickHouse stores the logs in the `observability.kubernetes_logs` table.
+
+**Important:** Fluent Bit sends logs directly to ClickHouse. The OpenTelemetry Collector is not involved in this logging pipeline. It will be used separately for metrics and traces.
+
+## 46. ClickHouse Log Table Creation
+
+A dedicated table named `kubernetes_logs` was created inside the `observability` database.
+
+### Table Schema
+
+```sql
+CREATE TABLE observability.kubernetes_logs
+(
+    timestamp DateTime64(3, 'UTC'),
+    cluster_name LowCardinality(String) DEFAULT 'clickhouse-unified-poc',
+    namespace LowCardinality(String) DEFAULT 'unknown',
+    pod_name String DEFAULT 'unknown',
+    container_name LowCardinality(String) DEFAULT 'unknown',
+    level LowCardinality(String) DEFAULT 'INFO',
+    service_name LowCardinality(String) DEFAULT 'unknown',
+    message String DEFAULT '',
+    trace_id String DEFAULT '',
+    span_id String DEFAULT '',
+    attributes String DEFAULT '{}',
+    log_type LowCardinality(String) DEFAULT 'application',
+    raw_log String DEFAULT ''
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (namespace, pod_name, timestamp);
+```
+
+### Column Description
+
+| Column | Description |
+|---|---|
+| timestamp | Timestamp assigned to the log event |
+| cluster_name | Kubernetes cluster name |
+| namespace | Kubernetes namespace |
+| pod_name | Name of the Kubernetes pod |
+| container_name | Container name |
+| level | Log severity level |
+| service_name | Application or service name |
+| message | Extracted log message |
+| trace_id | Distributed trace identifier |
+| span_id | Span identifier |
+| attributes | Additional structured attributes |
+| log_type | Log category such as application, access, or infrastructure |
+| raw_log | Original log record |
+
+### Table Design Considerations
+
+- `MergeTree` is used as the storage engine.
+- Monthly partitioning is configured using the log timestamp.
+- The sorting key uses namespace, pod name, and timestamp.
+- `LowCardinality(String)` is used for frequently repeated string values such as namespace, container name, and log level.
+- The schema supports both structured application logs and plain-text infrastructure logs.
+
+## 47. Fluent Bit Installation and Helm Configuration
+
+Fluent Bit was deployed using its official Helm chart.
+
+### Add Fluent Bit Helm Repository
+
+```bash
+helm repo add fluent https://fluent.github.io/helm-charts
+```
+
+Update the repository:
+
+```bash
+helm repo update
+```
+
+### Download Helm Chart
+
+The Fluent Bit chart version used for this POC was `0.58.3`.
+
+```bash
+helm pull fluent/fluent-bit --version 0.58.3 \
+  --destination ~/clickhouse-unified-poc/helm
+```
+
+### Configuration Files
+
+The following files were maintained:
+
+```text
+clickhouse-unified-poc/
+├── configs/
+│   ├── fluent-bit-default-values.yaml
+│   └── fluent-bit-values.yaml
+└── helm/
+    └── fluent-bit-0.58.3.tgz
+```
+
+- `fluent-bit-default-values.yaml` contains the chart's default configuration.
+- `fluent-bit-values.yaml` contains the custom POC configuration.
+
+### Configuration Validation
+
+Helm lint was executed to validate the custom configuration.
+
+```bash
+helm lint ~/clickhouse-unified-poc/helm/fluent-bit-0.58.3.tgz \
+  -f ~/clickhouse-unified-poc/configs/fluent-bit-values.yaml
+```
+
+The Helm templates were also rendered and inspected before deployment.
+
+## 48. Fluent Bit Input Configuration
+
+Fluent Bit uses the Tail input plugin to collect Kubernetes container logs.
+
+```ini
+[INPUT]
+    Name tail
+    Path /var/log/containers/*.log
+    multiline.parser docker, cri
+    Tag kube.*
+    Mem_Buf_Limit 20MB
+    Skip_Long_Lines On
+```
+
+### Configuration Explanation
+
+- `Name tail`: Uses the Tail input plugin.
+- `Path`: Reads container log files from `/var/log/containers/`.
+- `multiline.parser`: Supports Docker and CRI container log formats.
+- `Tag`: Assigns the `kube.*` tag to collected records.
+- `Mem_Buf_Limit`: Limits the memory buffer used by the input.
+- `Skip_Long_Lines`: Skips log lines that exceed the configured buffer constraints.
+
+The Tail input plugin is responsible for collecting log records. It does not perform Kubernetes metadata enrichment or ClickHouse transformation.
+
+## 49. Kubernetes Filter Configuration
+
+The Kubernetes filter enriches collected logs with Kubernetes metadata.
+
+```ini
+[FILTER]
+    Name kubernetes
+    Match kube.*
+    Kube_Tag_Prefix kube.var.log.containers.
+    Merge_Log On
+    Keep_Log On
+    K8S-Logging.Parser On
+    K8S-Logging.Exclude On
+```
+
+### Configuration Explanation
+
+- `Name kubernetes`: Enables the Kubernetes filter.
+- `Match kube.*`: Applies the filter to records with matching tags.
+- `Kube_Tag_Prefix`: Defines the prefix used to identify Kubernetes container log records.
+- `Merge_Log On`: Attempts to merge structured JSON log content into the main record.
+- `Keep_Log On`: Retains the original log field after merging.
+- `K8S-Logging.Parser On`: Allows pod-level parser configuration.
+- `K8S-Logging.Exclude On`: Allows pod-level log exclusion configuration.
+
+This filter helps attach Kubernetes metadata such as namespace, pod name, and container name to each log record.
+
+## 50. Lua Transformation and Its Purpose
+
+A custom Lua script was implemented to transform Fluent Bit records into the required ClickHouse table structure.
+
+Script location:
+
+```text
+configs/clickhouse_transform.lua
+```
+
+Inside the Fluent Bit container, the script is mounted at:
+
+```text
+/fluent-bit/scripts/clickhouse_transform.lua
+```
+
+### Why Lua Was Used
+
+Fluent Bit provides several built-in filters, including:
+
+- Kubernetes Filter
+- Parser Filter
+- Modify Filter
+- Nest Filter
+
+These filters support common parsing, enrichment, and field modification operations.
+
+However, this POC requires additional conditional processing, including:
+
+- Extracting fields from structured log records.
+- Applying default values when fields are missing.
+- Normalizing log severity to uppercase.
+- Classifying records into application, access, and infrastructure categories.
+- Formatting the event timestamp.
+- Producing a consistent output structure matching the ClickHouse table.
+
+A Lua filter was selected to implement this custom transformation logic in one place.
+
+**Lua is not mandatory for every Fluent Bit deployment.** It is used here because the POC requires custom conditional transformation beyond the standard filter configuration.
+
+### Lua Script
+
+```lua
+function transform_log(tag, timestamp, record)
+    local k8s = record["kubernetes"] or {}
+
+    local namespace = k8s["namespace_name"] or "unknown"
+    local pod_name = k8s["pod_name"] or "unknown"
+    local container_name = k8s["container_name"] or "unknown"
+
+    local raw_log = record["log"] or ""
+
+    if type(raw_log) ~= "string" then
+        raw_log = tostring(raw_log)
+    end
+
+    local level = record["level"] or "UNKNOWN"
+    local service_name = record["service_name"] or container_name
+    local message = record["message"] or raw_log
+
+    local trace_id = record["trace_id"] or ""
+    local span_id = record["span_id"] or ""
+
+    level = string.upper(tostring(level))
+
+    local log_type = "infrastructure"
+
+    if record["service_name"] ~= nil then
+        log_type = "application"
+    elseif string.match(raw_log, '"%s*[A-Z]+%s+[^"]*HTTP/') then
+        log_type = "access"
+    end
+
+    local seconds = math.floor(timestamp)
+    local milliseconds = math.floor((timestamp - seconds) * 1000)
+
+    local formatted_time = os.date("!%Y-%m-%d %H:%M:%S", seconds)
+        .. string.format(".%03d", milliseconds)
+
+    local output = {
+        timestamp = formatted_time,
+        cluster_name = "clickhouse-unified-poc",
+        namespace = namespace,
+        pod_name = pod_name,
+        container_name = container_name,
+        level = level,
+        service_name = service_name,
+        message = tostring(message),
+        trace_id = tostring(trace_id),
+        span_id = tostring(span_id),
+        attributes = "{}",
+        log_type = log_type,
+        raw_log = raw_log
+    }
+
+    return 2, timestamp, output
+end
+```
+
+### Lua Script Working
+
+1. Reads Kubernetes metadata from the record.
+2. Extracts namespace, pod name, and container name.
+3. Reads the original log content.
+4. Extracts level, service name, message, trace ID, and span ID when available.
+5. Converts the log level to uppercase.
+6. Classifies the record:
+   - `application` when `service_name` is present.
+   - `access` when the basic HTTP access-log pattern matches.
+   - `infrastructure` otherwise.
+7. Formats the Fluent Bit event timestamp into a UTC timestamp with millisecond precision.
+8. Creates a transformed record containing the 13 ClickHouse table fields.
+9. Returns the transformed record to Fluent Bit.
+
+### Important Timestamp Detail
+
+The timestamp used in the ClickHouse table is generated from the Fluent Bit event timestamp.
+
+The original application timestamp, if present in the JSON log, remains available inside `raw_log`. It is not currently used as the normalized ClickHouse `timestamp`.
+
+### Important Transformation Limitations
+
+- The `attributes` column currently contains `{}`.
+- Additional application fields such as `order_id`, `payment_id`, `customer_id`, `amount`, and `error_type` are not individually extracted into `attributes`.
+- These fields remain available in the original `raw_log`.
+- The current `log_type` classification is basic and can be enhanced for more log formats.
+- Plain-text records may receive `UNKNOWN` as their log level when no severity is extracted.
+
+### Lua Return Code
+
+The script returns:
+
+```lua
+return 2, timestamp, output
+```
+
+Return code `2` tells Fluent Bit to replace the original record with the transformed record while retaining the event timestamp.
+
+## 51. Fluent Bit Lua Filter Configuration
+
+The Lua script is connected to Fluent Bit using the Lua filter.
+
+```ini
+[FILTER]
+    Name lua
+    Match kube.*
+    script /fluent-bit/scripts/clickhouse_transform.lua
+    call transform_log
+```
+
+### Configuration Explanation
+
+- `Name lua`: Enables the Lua filter.
+- `Match kube.*`: Applies the transformation to Kubernetes log records.
+- `script`: Specifies the mounted Lua script path.
+- `call`: Specifies the Lua function that Fluent Bit should execute.
+
+The Lua filter processes the records after the Kubernetes filter has enriched them.
+
+## 52. Fluent Bit HTTP Output Configuration
+
+Fluent Bit sends transformed records directly to ClickHouse through its HTTP interface.
+
+```ini
+[OUTPUT]
+    Name http
+    Match kube.*
+    Host clickhouse-clickhouse-headless.clickhouse.svc.cluster.local
+    Port 8123
+    URI /?query=INSERT%20INTO%20observability.kubernetes_logs%20FORMAT%20JSONEachRow
+    Format json_lines
+```
+
+### Configuration Explanation
+
+- `Name http`: Uses the HTTP output plugin.
+- `Match kube.*`: Sends matching Kubernetes log records.
+- `Host`: ClickHouse headless service DNS.
+- `Port`: ClickHouse HTTP port 8123.
+- `URI`: Executes an INSERT query against `observability.kubernetes_logs`.
+- `Format json_lines`: Sends records in JSONEachRow-compatible line format.
+
+The Fluent Bit output sends data to ClickHouse without routing it through the OpenTelemetry Collector.
+
+## 53. Fluent Bit Deployment in Kubernetes
+
+Fluent Bit was deployed in the `logging` namespace as a DaemonSet.
+
+### Deployment Command
+
+```bash
+helm upgrade --install fluent-bit \
+  ~/clickhouse-unified-poc/helm/fluent-bit-0.58.3.tgz \
+  --namespace logging \
+  -f ~/clickhouse-unified-poc/configs/fluent-bit-values.yaml \
+  --wait --timeout 5m
+```
+
+### Deployment Validation
+
+Check the Fluent Bit Pod:
+
+```bash
+kubectl get pods -n logging
+```
+
+Check the DaemonSet:
+
+```bash
+kubectl get daemonset -n logging
+```
+
+The deployment was validated with:
+
+- Fluent Bit Pod in Running state.
+- DaemonSet desired, current, ready, and available counts matching the single-node cluster.
+- Fluent Bit logs showing successful HTTP responses from ClickHouse.
+
+### ClickHouse Connectivity Validation
+
+Connectivity from the logging namespace to ClickHouse was tested using its HTTP endpoint.
+
+The `/ping` endpoint returned:
+
+```text
+HTTP 200
+Ok.
+```
+
+This confirmed that Fluent Bit's namespace could reach the ClickHouse HTTP service.
+
+## 54. Log Ingestion Validation in ClickHouse
+
+After deploying Fluent Bit, log ingestion was validated using SQL queries.
+
+### Verify Total Log Count
+
+```sql
+SELECT count()
+FROM observability.kubernetes_logs;
+```
+
+The initial validation returned 619 records. The count increased as Fluent Bit continued collecting logs.
+
+### Verify Logs by Namespace
+
+```sql
+SELECT
+    namespace,
+    count() AS total_logs
+FROM observability.kubernetes_logs
+GROUP BY namespace
+ORDER BY total_logs DESC;
+```
+
+During validation, logs were observed from namespaces including:
+
+- `clickhouse-operator-system`
+- `logging`
+- `kube-system`
+- `clickhouse`
+
+The counts are dynamic because Fluent Bit continuously collects new container logs.
+
+### Verify Recent Logs
+
+```sql
+SELECT
+    timestamp,
+    namespace,
+    pod_name,
+    container_name,
+    level,
+    service_name,
+    message,
+    log_type
+FROM observability.kubernetes_logs
+ORDER BY timestamp DESC
+LIMIT 20;
+```
+
+This query was used to inspect recent records and validate the transformed table structure.
+
+## 55. Application Log Ingestion Validation
+
+The Order API and Payment Service were tested to generate application logs.
+
+A successful order request was triggered through the Order API.
+
+The application logs were subsequently observed in ClickHouse.
+
+### Verify Application Logs
+
+```sql
+SELECT
+    timestamp,
+    namespace,
+    pod_name,
+    service_name,
+    level,
+    message,
+    trace_id,
+    span_id,
+    raw_log
+FROM observability.kubernetes_logs
+WHERE namespace = 'applications'
+ORDER BY timestamp DESC
+LIMIT 20;
+```
+
+The validation confirmed that:
+
+- Order API logs were ingested.
+- Payment Service logs were ingested.
+- Structured log fields such as service name and severity were extracted.
+- Trace IDs and span IDs were available in the corresponding application log records.
+- Original log content was preserved in `raw_log`.
+
+## 56. Successful and Failed Payment Log Validation
+
+Both successful and failed payment scenarios were tested to validate application log ingestion.
+
+### Successful Payment Scenario
+
+A successful order request was generated using a payment amount below the configured rejection threshold.
+
+Observed behavior:
+
+- Order API processed the request.
+- Payment Service processed the payment successfully.
+- Order API returned HTTP 200.
+- Application logs were available in ClickHouse.
+
+### Failed Payment Scenario
+
+A failed payment request was generated using an amount of 15000.
+
+Observed behavior:
+
+- Payment Service rejected the payment with HTTP 400.
+- The error type was `PAYMENT_DECLINED`.
+- Order API received the

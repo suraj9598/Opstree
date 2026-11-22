@@ -1413,3 +1413,1490 @@ The final outcome will be a working local Kubernetes-based unified observability
 - Logs and traces can be correlated using trace identifiers.
 
 This POC will help evaluate ClickHouse's capabilities as a centralized backend for unified observability.
+
+---
+
+# PHASE 3: ClickHouse Schema and Demo Microservices Development
+
+## 21. Phase 3 Overview
+
+The objective of Phase 3 was to prepare ClickHouse for observability data and develop two interconnected demo microservices to generate application logs, metrics, and distributed traces.
+
+The following activities were performed:
+
+1. Created the `observability` database in ClickHouse.
+2. Created the required observability tables.
+3. Developed the Order API microservice using Python FastAPI.
+4. Developed the Payment Service microservice using Python FastAPI.
+5. Implemented structured JSON logging.
+6. Integrated OpenTelemetry SDK instrumentation.
+7. Implemented distributed trace context propagation.
+8. Added Prometheus-compatible metrics endpoints.
+9. Built Docker images for both applications.
+10. Loaded application images into the Kind cluster.
+11. Deployed both applications into the Kubernetes `applications` namespace.
+12. Validated inter-service communication.
+13. Tested successful and failed payment scenarios.
+14. Verified application logs and trace correlation.
+
+At the end of this phase, both applications were running successfully inside Kubernetes, and distributed trace context propagation was verified across the services.
+
+**Important:** Application log generation and trace context propagation are validated. Actual Fluent Bit log ingestion and OpenTelemetry Collector trace export are part of the subsequent implementation phases.
+
+## 22. ClickHouse Database and Table Preparation
+
+### 22.1 Observability Database
+
+A dedicated database named `observability` was created in ClickHouse to store observability-related data.
+
+Database creation:
+
+```sql
+CREATE DATABASE IF NOT EXISTS observability;
+```
+
+The database is intended to store:
+
+- Application logs.
+- Kubernetes logs.
+- Metrics.
+- Distributed traces.
+
+### 22.2 Observability Table Preparation
+
+The required ClickHouse tables were created for storing observability data.
+
+The table structure is designed to support the different telemetry signals and their associated attributes.
+
+The observability schema is intended to support:
+
+| Signal | Data |
+|---|---|
+| Logs | Timestamp, service name, severity, message, trace ID, span ID |
+| Metrics | Metric name, timestamp, value, resource attributes |
+| Traces | Trace ID, span ID, parent span ID, service name, duration |
+
+### 22.3 Why Separate Tables?
+
+Different observability signals have different data structures and query requirements.
+
+For example:
+
+- Logs contain event messages and severity information.
+- Metrics contain numerical measurements over time.
+- Traces contain spans, relationships, and execution timing information.
+
+Keeping appropriate table structures for each signal makes it easier to query and analyze the data.
+
+### 22.4 Database and Table Verification
+
+Database verification:
+
+```sql
+SHOW DATABASES;
+```
+
+Table verification:
+
+```sql
+SHOW TABLES FROM observability;
+```
+
+To inspect a table definition:
+
+```sql
+SHOW CREATE TABLE observability.<table_name>;
+```
+
+The database and required observability table creation were completed.
+
+**Implementation Note:** The existence of tables confirms schema preparation. Actual application log, metric, and trace ingestion must be validated separately after their respective collectors are configured.
+
+---
+
+## 23. Demo Microservices Architecture
+
+Two independent Python FastAPI applications were developed to simulate a real-world microservice communication flow.
+
+The applications are:
+
+1. Order API
+2. Payment Service
+
+### 23.1 Application Architecture
+
+```text
+                 Client
+                   |
+                   |
+                   v
+              Order API
+                   |
+                   |
+            HTTP Request
+                   |
+                   v
+            Payment Service
+                   |
+                   |
+             Payment Result
+                   |
+                   v
+              Order API
+                   |
+                   v
+             Client Response
+```
+
+### 23.2 Order API Responsibilities
+
+The Order API is responsible for:
+
+- Accepting order creation requests.
+- Generating unique order IDs.
+- Storing order information in memory.
+- Calling Payment Service through HTTP.
+- Receiving payment responses.
+- Generating structured JSON logs.
+- Creating OpenTelemetry spans.
+- Exposing application metrics.
+
+### 23.3 Payment Service Responsibilities
+
+The Payment Service is responsible for:
+
+- Accepting payment requests.
+- Generating unique payment IDs.
+- Processing payment requests.
+- Returning successful payment responses.
+- Rejecting payments based on the configured amount condition.
+- Generating structured JSON logs.
+- Creating OpenTelemetry spans.
+- Exposing application metrics.
+
+### 23.4 Application Communication
+
+The Order API communicates with Payment Service using HTTP.
+
+The Kubernetes Service URL is:
+
+```text
+http://payment-service:8001/payments
+```
+
+The URL uses Kubernetes internal DNS resolution.
+
+Both applications are deployed in the same Kubernetes namespace:
+
+```text
+applications
+```
+
+Therefore, the short Kubernetes Service name `payment-service` can be used for internal communication.
+
+---
+
+## 24. Order API Implementation
+
+### 24.1 Project Location
+
+```text
+application/order-api/
+```
+
+Files:
+
+```text
+order-api/
+├── main.py
+├── requirements.txt
+└── Dockerfile
+```
+
+### 24.2 Technologies Used
+
+| Technology | Purpose |
+|---|---|
+| Python | Application development |
+| FastAPI | REST API framework |
+| Uvicorn | ASGI application server |
+| HTTPX | HTTP communication with Payment Service |
+| OpenTelemetry SDK | Distributed tracing |
+| FastAPI Instrumentation | Automatic request instrumentation |
+| HTTPX Instrumentation | HTTP client instrumentation and trace propagation |
+| prometheus-client | Application metrics |
+
+### 24.3 API Endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/health` | Application health check |
+| POST | `/orders` | Create an order |
+| GET | `/orders/{order_id}` | Retrieve order details |
+| POST | `/simulate-error` | Generate a test application error |
+| GET | `/metrics` | Expose Prometheus-compatible metrics |
+
+### 24.4 Order Creation Workflow
+
+When a client sends an order request:
+
+1. Order API receives the customer ID and amount.
+2. A unique order ID is generated.
+3. Order information is stored in memory.
+4. An INFO-level JSON log is generated.
+5. Order API calls Payment Service.
+6. Payment Service processes the payment.
+7. Order API receives the payment response.
+8. The final order response is returned to the client.
+
+### 24.5 Payment Service URL Configuration
+
+The Payment Service URL is configurable through an environment variable.
+
+```python
+SERVICE_NAME = "order-api"
+
+PAYMENT_SERVICE_URL = os.getenv(
+    "PAYMENT_SERVICE_URL",
+    "http://payment-service:8001/payments"
+)
+
+OTLP_ENDPOINT = os.getenv(
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
+)
+```
+
+This allows the same application image to work in different environments by changing environment variables.
+
+---
+
+## 25. Payment Service Implementation
+
+### 25.1 Project Location
+
+```text
+application/payment-service/
+```
+
+Files:
+
+```text
+payment-service/
+├── main.py
+├── requirements.txt
+└── Dockerfile
+```
+
+### 25.2 Technologies Used
+
+| Technology | Purpose |
+|---|---|
+| Python | Application development |
+| FastAPI | REST API framework |
+| Uvicorn | ASGI application server |
+| OpenTelemetry SDK | Distributed tracing |
+| FastAPI Instrumentation | Request instrumentation |
+| prometheus-client | Application metrics |
+
+### 25.3 API Endpoints
+
+| Method | Endpoint | Purpose |
+|---|---|---|
+| GET | `/health` | Application health check |
+| POST | `/payments` | Process payment |
+| POST | `/simulate-error` | Generate a test application error |
+| GET | `/metrics` | Expose Prometheus-compatible metrics |
+
+### 25.4 Payment Processing Logic
+
+The Payment Service uses a simple condition to simulate successful and failed payment processing.
+
+```python
+if request.amount >= 10000:
+    payments_processed.labels(status="failed").inc()
+
+    log_event(
+        "ERROR",
+        "Payment processing failed",
+        payment_id=payment_id,
+        order_id=request.order_id,
+        amount=request.amount,
+        error_type="PAYMENT_DECLINED"
+    )
+
+    raise HTTPException(
+        status_code=400,
+        detail="Payment declined: simulated failure"
+    )
+```
+
+Payment behavior:
+
+| Amount | Expected Result |
+|---|---|
+| Less than 10000 | SUCCESS |
+| Greater than or equal to 10000 | PAYMENT_DECLINED |
+
+This condition is used to generate both successful and failed application workflows.
+
+---
+
+## 26. Python Dependencies and Virtual Environment
+
+### 26.1 Order API Requirements
+
+File:
+
+```text
+application/order-api/requirements.txt
+```
+
+```text
+fastapi
+uvicorn[standard]
+httpx
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-httpx
+opentelemetry-exporter-otlp
+prometheus-client
+```
+
+### 26.2 Payment Service Requirements
+
+File:
+
+```text
+application/payment-service/requirements.txt
+```
+
+```text
+fastapi
+uvicorn[standard]
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-instrumentation-fastapi
+opentelemetry-exporter-otlp
+prometheus-client
+```
+
+### 26.3 Python Virtual Environment
+
+A shared Python virtual environment was created inside the application directory.
+
+```text
+application/.venv/
+```
+
+The virtual environment was used to install dependencies and validate both applications locally.
+
+Dependency verification:
+
+```bash
+.venv/bin/python -c \
+"import fastapi, httpx, opentelemetry, prometheus_client; print('All required packages imported successfully')"
+```
+
+Verified output:
+
+```text
+All required packages imported successfully
+```
+
+This confirmed that the required Python packages were installed and importable.
+
+---
+
+## 27. Structured JSON Logging Implementation
+
+Both applications were configured to generate structured JSON logs.
+
+Instead of generating only plain-text log messages, each application produces JSON records containing useful application and tracing information.
+
+### 27.1 Common Log Fields
+
+| Field | Description |
+|---|---|
+| timestamp | UTC timestamp |
+| level | Log severity |
+| service_name | Application service name |
+| message | Log message |
+| trace_id | Distributed trace identifier |
+| span_id | Current span identifier |
+
+Additional fields depend on the application event.
+
+For example:
+
+- `order_id`
+- `payment_id`
+- `customer_id`
+- `amount`
+- `payment_status`
+- `error_type`
+
+### 27.2 Example Order API Log
+
+```json
+{
+  "timestamp": "2026-11-22T16:43:36.964703+00:00",
+  "level": "INFO",
+  "service_name": "order-api",
+  "message": "Order created successfully",
+  "trace_id": "19f538ceb85f2ab83b81df829f2f6dca",
+  "span_id": "e7746ae86dcf3a3f",
+  "order_id": "1bc448f6-5488-4e09-a97b-9e52b0b7e0c8",
+  "customer_id": "CUST-2026-202",
+  "amount": 15000.0
+}
+```
+
+### 27.3 Example Payment Service Error Log
+
+```json
+{
+  "timestamp": "2026-11-22T16:43:36.986756+00:00",
+  "level": "ERROR",
+  "service_name": "payment-service",
+  "message": "Payment processing failed",
+  "trace_id": "19f538ceb85f2ab83b81df829f2f6dca",
+  "span_id": "0d93d73328f4d2a1",
+  "payment_id": "2846bf05-3f47-468f-b45d-e50adbf985fe",
+  "order_id": "1bc448f6-5488-4e09-a97b-9e52b0b7e0c8",
+  "amount": 15000.0,
+  "error_type": "PAYMENT_DECLINED"
+}
+```
+
+### 27.4 Why Structured JSON Logging?
+
+Structured JSON logging provides several advantages:
+
+- Logs can be parsed programmatically.
+- Fields can be extracted for filtering.
+- Logs can be grouped by service name.
+- Errors can be filtered using severity.
+- Trace IDs can be used to correlate logs across services.
+- JSON records can be ingested into ClickHouse for analytical queries.
+
+---
+
+## 28. OpenTelemetry Instrumentation
+
+Both microservices were instrumented using the OpenTelemetry SDK.
+
+### 28.1 OpenTelemetry Components
+
+The applications use:
+
+| Component | Purpose |
+|---|---|
+| OpenTelemetry API | Provides tracing interfaces |
+| OpenTelemetry SDK | Creates and manages spans |
+| TracerProvider | Configures tracing |
+| Resource | Identifies the application service |
+| BatchSpanProcessor | Processes spans in batches |
+| OTLPSpanExporter | Exports spans through OTLP |
+| FastAPI Instrumentation | Instruments incoming HTTP requests |
+| HTTPX Instrumentation | Instruments outgoing HTTP requests |
+
+### 28.2 Service Identification
+
+Each application has a separate service name.
+
+Order API:
+
+```python
+SERVICE_NAME = "order-api"
+```
+
+Payment Service:
+
+```python
+SERVICE_NAME = "payment-service"
+```
+
+The service name is attached to the OpenTelemetry resource.
+
+### 28.3 Trace Context Propagation
+
+The Order API uses HTTPX to communicate with Payment Service.
+
+HTTPX instrumentation is enabled:
+
+```python
+HTTPXClientInstrumentor().instrument()
+```
+
+This instrumentation automatically propagates W3C trace context through HTTP headers.
+
+The Payment Service receives the propagated context and creates its own span within the same trace.
+
+### 28.4 Trace Relationship
+
+```text
+                  Trace ID
+                     |
+                     |
+              Order API Span
+                     |
+                     |
+               HTTP Request
+                     |
+                     v
+             Payment Service Span
+```
+
+Both spans belong to the same distributed trace but have different span IDs.
+
+### 28.5 OTLP Export Configuration
+
+Both applications support an environment variable:
+
+```text
+OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+```
+
+This variable will be configured with the OpenTelemetry Collector OTLP HTTP endpoint in a subsequent phase.
+
+**Current status:** The applications generate trace and span identifiers, and trace context propagation has been validated. Actual OTLP export to the Collector is not yet configured.
+
+---
+
+## 29. Application Metrics
+
+Both applications expose Prometheus-compatible metrics through their `/metrics` endpoints.
+
+### 29.1 Order API Metrics
+
+| Metric | Type | Purpose |
+|---|---|---|
+| `orders_created_total` | Counter | Total orders created |
+| `order_request_duration_seconds` | Histogram | Time taken to process order requests |
+
+### 29.2 Payment Service Metrics
+
+| Metric | Type | Purpose |
+|---|---|---|
+| `payments_processed_total` | Counter | Total payments processed, grouped by status |
+| `payment_request_duration_seconds` | Histogram | Time taken to process payment requests |
+
+### 29.3 Metrics Endpoints
+
+Order API:
+
+```text
+http://localhost:8000/metrics
+```
+
+Payment Service:
+
+```text
+http://localhost:8001/metrics
+```
+
+The endpoints are implemented and available through the applications.
+
+Scraping and exporting these metrics into ClickHouse through the OpenTelemetry Collector remains pending.
+
+---
+
+## 30. Docker Image Creation
+
+Both applications were containerized using separate Dockerfiles.
+
+### 30.1 Order API Dockerfile
+
+Location:
+
+```text
+application/order-api/Dockerfile
+```
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY main.py .
+
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+### 30.2 Payment Service Dockerfile
+
+Location:
+
+```text
+application/payment-service/Dockerfile
+```
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY main.py .
+
+EXPOSE 8001
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
+```
+
+### 30.3 Container Port Configuration
+
+| Application | Container Port |
+|---|---:|
+| Order API | 8000 |
+| Payment Service | 8001 |
+
+Separate container ports allow the applications to listen on different ports.
+
+### 30.4 Build Order API Image
+
+```bash
+cd ~/clickhouse-unified-poc/application/order-api
+
+docker build -t order-api:poc-v1 .
+```
+
+### 30.5 Build Payment Service Image
+
+```bash
+cd ~/clickhouse-unified-poc/application/payment-service
+
+docker build -t payment-service:poc-v1 .
+```
+
+### 30.6 Verify Docker Images
+
+```bash
+docker images | grep -E 'order-api|payment-service'
+```
+
+Verified images:
+
+| Image | Image Size |
+|---|---:|
+| order-api:poc-v1 | Approximately 307 MB |
+| payment-service:poc-v1 | Approximately 305 MB |
+
+Both Docker images were built successfully.
+
+---
+
+## 31. Loading Images into Kind
+
+The locally built images were loaded into the Kind cluster.
+
+This allows Kubernetes to use the local images without pulling them from Docker Hub.
+
+### 31.1 Verify Active Kubernetes Context
+
+```bash
+kubectl config get-contexts
+```
+
+Active context:
+
+```text
+kind-clickhouse-unified-poc
+```
+
+### 31.2 Load Order API Image
+
+```bash
+kind load docker-image order-api:poc-v1 \
+  --name clickhouse-unified-poc
+```
+
+### 31.3 Load Payment Service Image
+
+```bash
+kind load docker-image payment-service:poc-v1 \
+  --name clickhouse-unified-poc
+```
+
+Both images were loaded into the target Kind cluster.
+
+**Important:** Image loading is performed at the Kind cluster level. Kubernetes namespaces are specified separately in Deployment and Service manifests.
+
+---
+
+## 32. Kubernetes Application Deployment
+
+### 32.1 Application Namespace
+
+The `applications` namespace was already available in the cluster.
+
+Verification:
+
+```bash
+kubectl get namespace applications
+```
+
+Verified output:
+
+```text
+NAME           STATUS
+applications   Active
+```
+
+Initially, no application resources were present in the namespace.
+
+```bash
+kubectl get all -n applications
+```
+
+Output:
+
+```text
+No resources found in applications namespace.
+```
+
+Both microservices were subsequently deployed into this namespace.
+
+### 32.2 Order API Kubernetes Manifest
+
+File:
+
+```text
+kubernetes/order-api.yaml
+```
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-api
+  namespace: applications
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: order-api
+  template:
+    metadata:
+      labels:
+        app: order-api
+    spec:
+      containers:
+        - name: order-api
+          image: order-api:poc-v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          env:
+            - name: PAYMENT_SERVICE_URL
+              value: "http://payment-service:8001/payments"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-api
+  namespace: applications
+spec:
+  type: ClusterIP
+  selector:
+    app: order-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+```
+
+### 32.3 Payment Service Kubernetes Manifest
+
+File:
+
+```text
+kubernetes/payment-service.yaml
+```
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-service
+  namespace: applications
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-service
+  template:
+    metadata:
+      labels:
+        app: payment-service
+    spec:
+      containers:
+        - name: payment-service
+          image: payment-service:poc-v1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8001
+              protocol: TCP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-service
+  namespace: applications
+spec:
+  type: ClusterIP
+  selector:
+    app: payment-service
+  ports:
+    - name: http
+      port: 8001
+      targetPort: 8001
+      protocol: TCP
+```
+
+### 32.4 Kubernetes Manifest Validation
+
+Before applying the manifests, a client-side dry run was performed.
+
+```bash
+kubectl apply --dry-run=client \
+  -f ~/clickhouse-unified-poc/kubernetes/order-api.yaml \
+  -f ~/clickhouse-unified-poc/kubernetes/payment-service.yaml
+```
+
+Verified output:
+
+```text
+deployment.apps/order-api created (dry run)
+service/order-api created (dry run)
+deployment.apps/payment-service created (dry run)
+service/payment-service created (dry run)
+```
+
+All four resources passed dry-run validation.
+
+### 32.5 Deploy Applications
+
+```bash
+kubectl apply \
+  -f ~/clickhouse-unified-poc/kubernetes/order-api.yaml \
+  -f ~/clickhouse-unified-poc/kubernetes/payment-service.yaml
+```
+
+Verified output:
+
+```text
+deployment.apps/order-api created
+service/order-api created
+deployment.apps/payment-service created
+service/payment-service created
+```
+
+Both Deployments and Services were successfully created.
+
+---
+
+## 33. Kubernetes Pod and Service Validation
+
+### 33.1 Pod Validation
+
+Command:
+
+```bash
+kubectl get pods -n applications
+```
+
+Verified output:
+
+```text
+NAME                               READY   STATUS
+order-api-64bfd6ccc7-qxfq5         1/1     Running
+payment-service-7c86795b68-s4dhr   1/1     Running
+```
+
+Both application Pods reached the Running state.
+
+### 33.2 ImagePullBackOff Issue
+
+During the initial Payment Service deployment, the Pod entered the `ImagePullBackOff` state.
+
+The Kubernetes events showed that the node attempted to pull the image from Docker Hub:
+
+```text
+docker.io/library/payment-service:poc-v1
+```
+
+The local image was not available to the Kind node at that time.
+
+The issue was resolved by loading the local image into the cluster:
+
+```bash
+kind load docker-image payment-service:poc-v1 \
+  --name clickhouse-unified-poc
+```
+
+After the image was available, the Payment Service Pod started successfully.
+
+### 33.3 Service Validation
+
+Command:
+
+```bash
+kubectl get svc -n applications
+```
+
+Verified output:
+
+```text
+NAME              TYPE        CLUSTER-IP      PORT(S)
+order-api         ClusterIP   10.96.97.33     8000/TCP
+payment-service   ClusterIP   10.96.108.140   8001/TCP
+```
+
+Service configuration:
+
+| Service | Type | Port | Target Port |
+|---|---|---:|---:|
+| order-api | ClusterIP | 8000 | 8000 |
+| payment-service | ClusterIP | 8001 | 8001 |
+
+Both Services are available inside the Kubernetes cluster.
+
+---
+
+## 34. Internal Kubernetes Communication Validation
+
+Internal communication between the two microservices was tested from inside the Order API Pod.
+
+Command:
+
+```bash
+kubectl exec -it deployment/order-api \
+  -n applications -- \
+  python -c "import urllib.request; print(urllib.request.urlopen('http://payment-service:8001/health').read().decode())"
+```
+
+Verified response:
+
+```json
+{
+  "status": "healthy",
+  "service": "payment-service"
+}
+```
+
+This confirms:
+
+- Kubernetes Service DNS resolution is working.
+- Order API can reach Payment Service.
+- The Payment Service health endpoint is responding.
+- Internal application communication is working.
+
+---
+
+## 35. Swagger UI and Browser Access
+
+Both applications provide Swagger UI through FastAPI.
+
+Kubernetes Services are configured as ClusterIP, so `kubectl port-forward` is used to access them locally.
+
+### 35.1 Order API Port Forwarding
+
+Run in Terminal 1:
+
+```bash
+kubectl port-forward \
+  -n applications \
+  svc/order-api 8000:8000
+```
+
+Browser URL:
+
+```text
+http://localhost:8000/docs
+```
+
+### 35.2 Payment Service Port Forwarding
+
+Run in Terminal 2:
+
+```bash
+kubectl port-forward \
+  -n applications \
+  svc/payment-service 8001:8001
+```
+
+Browser URL:
+
+```text
+http://localhost:8001/docs
+```
+
+Both port-forward processes must remain running while accessing their respective Swagger UIs.
+
+---
+
+## 36. Application End-to-End Testing
+
+Two application scenarios were validated through the Order API Swagger UI.
+
+1. Successful payment.
+2. Failed payment.
+
+### 36.1 Successful Payment Scenario
+
+Request:
+
+```http
+POST /orders
+```
+
+Request body:
+
+```json
+{
+  "customer_id": "CUST-2026-201",
+  "amount": 750
+}
+```
+
+**Expected Workflow:**
+
+1. Order API receives the request.
+2. A unique order ID is generated.
+3. Order API sends a payment request to Payment Service.
+4. Payment Service processes the payment.
+5. Payment Service returns a successful response.
+6. Order API returns the order and payment details.
+
+Observed response:
+
+```text
+HTTP 200 OK
+```
+
+The payment status returned was:
+
+```text
+SUCCESS
+```
+
+The successful application workflow was validated.
+
+### 36.2 Failed Payment Scenario
+
+Request:
+
+```http
+POST /orders
+```
+
+Request body:
+
+```json
+{
+  "customer_id": "CUST-2026-202",
+  "amount": 15000
+}
+```
+
+**Expected Workflow:**
+
+1. Order API receives the request.
+2. An order ID is generated.
+3. Order API sends the payment request to Payment Service.
+4. Payment Service checks the requested amount.
+5. Since the amount is greater than or equal to 10,000, the payment is rejected.
+6. Payment Service returns HTTP 400.
+7. Order API catches the HTTP error.
+8. Order API generates an ERROR log.
+9. Order API returns HTTP 502 to the client.
+
+Observed Order API response:
+
+```text
+502 Bad Gateway
+```
+
+Response body:
+
+```json
+{
+  "detail": "Payment Service request failed"
+}
+```
+
+Observed Payment Service response:
+
+```text
+400 Bad Request
+```
+
+The failed payment scenario was validated successfully.
+
+---
+
+## 37. Application Log Verification
+
+Application logs were inspected directly from Kubernetes using `kubectl logs`.
+
+### 37.1 Payment Service Logs
+
+Command:
+
+```bash
+kubectl logs deployment/payment-service \
+  -n applications --tail=20
+```
+
+The logs showed successful payment processing:
+
+```json
+{
+  "level": "INFO",
+  "service_name": "payment-service",
+  "message": "Payment processed successfully",
+  "amount": 750.0
+}
+```
+
+The failed payment scenario generated:
+
+```json
+{
+  "level": "ERROR",
+  "service_name": "payment-service",
+  "message": "Payment processing failed",
+  "amount": 15000.0,
+  "error_type": "PAYMENT_DECLINED"
+}
+```
+
+The application returned:
+
+```text
+POST /payments HTTP/1.1" 400 Bad Request
+```
+
+### 37.2 Order API Logs
+
+Command:
+
+```bash
+kubectl logs deployment/order-api \
+  -n applications --tail=20
+```
+
+The logs showed order creation:
+
+```json
+{
+  "level": "INFO",
+  "service_name": "order-api",
+  "message": "Order created successfully",
+  "amount": 15000.0
+}
+```
+
+The failed payment scenario generated:
+
+```json
+{
+  "level": "ERROR",
+  "service_name": "order-api",
+  "message": "Payment processing failed",
+  "error": "Client error '400 Bad Request'"
+}
+```
+
+The application returned:
+
+```text
+POST /orders HTTP/1.1" 502 Bad Gateway
+```
+
+**Validation Result:** Both applications successfully generated structured JSON logs for successful and failed application workflows.
+
+---
+
+## 38. Distributed Trace Context Propagation Validation
+
+The two microservices were instrumented using OpenTelemetry.
+
+The Order API generates a trace while processing an order.
+
+When it calls Payment Service, HTTPX instrumentation propagates the W3C trace context through HTTP headers.
+
+Payment Service receives this context and generates its own span within the same distributed trace.
+
+### 38.1 Trace Correlation Architecture
+
+```text
+                Distributed Trace
+                       |
+                       |
+                  Trace ID
+                       |
+             +---------+---------+
+             |                   |
+             v                   v
+        Order API           Payment Service
+             |                   |
+             v                   v
+         Span ID A            Span ID B
+             |                   |
+             +---------+---------+
+                       |
+                       v
+                Same Trace ID
+```
+
+### 38.2 Failed Payment Trace Verification
+
+For the failed payment scenario, both applications generated the following Trace ID:
+
+```text
+19f538ceb85f2ab83b81df829f2f6dca
+```
+
+Order API:
+
+```text
+Service Name: order-api
+Trace ID: 19f538ceb85f2ab83b81df829f2f6dca
+Span ID: e7746ae86dcf3a3f
+```
+
+Payment Service:
+
+```text
+Service Name: payment-service
+Trace ID: 19f538ceb85f2ab83b81df829f2f6dca
+Span ID: 0d93d73328f4d2a1
+```
+
+### 38.3 Trace Correlation Result
+
+| Attribute | Order API | Payment Service |
+|---|---|---|
+| Trace ID | Same | Same |
+| Span ID | e7746ae86dcf3a3f | 0d93d73328f4d2a1 |
+| Service Name | order-api | payment-service |
+| Log Level | ERROR | ERROR |
+| Error Message | Payment processing failed | Payment processing failed |
+| Error Type | HTTP 400 from Payment Service | PAYMENT_DECLINED |
+
+### 38.4 Interpretation
+
+The same Trace ID across both applications confirms that distributed trace context propagation is working.
+
+Different Span IDs identify the individual operations performed by each service.
+
+This provides the foundation for correlating application logs and distributed traces using:
+
+- `trace_id`
+- `span_id`
+- `service_name`
+
+**Important:** This validation confirms trace context propagation through application logs. It does not confirm that complete span records have been exported to ClickHouse.
+
+The OTLP Collector endpoint has not yet been configured in the Kubernetes Deployments.
+
+Actual trace ingestion remains pending.
+
+---
+
+## 39. Phase 3 Validation Summary
+
+| Validation | Result |
+|---|---|
+| Observability database preparation | Completed |
+| Observability table creation | Completed |
+| Order API development | Completed |
+| Payment Service development | Completed |
+| Python dependency installation | Completed |
+| Structured JSON logging | Completed |
+| OpenTelemetry SDK instrumentation | Completed |
+| HTTP trace context propagation | Successful |
+| Application metrics endpoints | Implemented |
+| Order API Docker image | Built |
+| Payment Service Docker image | Built |
+| Images loaded into Kind | Completed |
+| Kubernetes manifest dry-run | Successful |
+| Order API Deployment | Running |
+| Payment Service Deployment | Running |
+| Kubernetes Services | Available |
+| Internal Service DNS communication | Successful |
+| Order API Swagger UI | Verified |
+| Payment Service Swagger UI | Verified |
+| Successful payment test | HTTP 200 |
+| Failed payment test | HTTP 502 from Order API, HTTP 400 from Payment Service |
+| Application logs | Verified in Kubernetes |
+| Same Trace ID across services | Verified |
+| Fluent Bit log ingestion into ClickHouse | Pending |
+| Metrics ingestion into ClickHouse | Pending |
+| Trace ingestion into ClickHouse | Pending |
+
+---
+
+## 40. Updated Implementation Roadmap
+
+| No. | Task | Status |
+|---|---|---|
+| 1 | Create project workspace and directory structure | Completed |
+| 2 | Record system specifications | Completed |
+| 3 | Install project-local kubectl | Completed |
+| 4 | Prepare Kind cluster configuration | Completed |
+| 5 | Create separate Kind cluster | Completed |
+| 6 | Create Kubernetes namespaces | Completed |
+| 7 | Deploy cert-manager | Completed |
+| 8 | Install ClickHouse Operator | Completed |
+| 9 | Verify ClickHouse Operator CRDs | Completed |
+| 10 | Deploy ClickHouse Keeper | Completed |
+| 11 | Deploy ClickHouse Server | Completed |
+| 12 | Configure persistent storage | Completed |
+| 13 | Verify ClickHouse Services and Endpoints | Completed |
+| 14 | Validate ClickHouse client connectivity | Completed |
+| 15 | Validate basic SQL query execution | Completed |
+| 16 | Create observability database | Completed |
+| 17 | Create observability tables | Completed |
+| 18 | Develop Order API | Completed |
+| 19 | Develop Payment Service | Completed |
+| 20 | Implement structured JSON logging | Completed |
+| 21 | Instrument applications using OpenTelemetry SDK | Completed |
+| 22 | Implement trace context propagation | Completed |
+| 23 | Implement application metrics endpoints | Completed |
+| 24 | Build Docker images | Completed |
+| 25 | Load images into Kind | Completed |
+| 26 | Deploy demo applications in Kubernetes | Completed |
+| 27 | Validate application-to-application communication | Completed |
+| 28 | Validate successful and failed application workflows | Completed |
+| 29 | Verify application logs in Kubernetes | Completed |
+| 30 | Verify trace context propagation | Completed |
+| 31 | Configure Fluent Bit direct ClickHouse output | Pending |
+| 32 | Deploy Fluent Bit DaemonSet | Pending |
+| 33 | Validate application log ingestion into ClickHouse | Pending |
+| 34 | Deploy Node Exporter, cAdvisor, and kube-state-metrics | Pending |
+| 35 | Deploy OpenTelemetry Collector | Pending |
+| 36 | Configure Prometheus Receiver | Pending |
+| 37 | Validate metrics ingestion into ClickHouse | Pending |
+| 38 | Configure OTLP Receiver | Pending |
+| 39 | Configure application OTLP export | Pending |
+| 40 | Validate trace ingestion into ClickHouse | Pending |
+| 41 | Configure Grafana ClickHouse datasource | Pending |
+| 42 | Create logs, metrics, and traces dashboards | Pending |
+| 43 | Validate end-to-end observability | Pending |
+| 44 | Validate cross-signal correlation | Pending |
+| 45 | Document POC results and findings | Pending |
+
+---
+
+## 41. Current Implementation Status
+
+At the completion of Phase 3:
+
+- ClickHouse infrastructure is deployed and operational.
+- The `observability` database and required tables have been created.
+- Order API and Payment Service have been developed.
+- Both applications have been containerized.
+- Both application images have been loaded into the Kind cluster.
+- Both applications are running in the Kubernetes `applications` namespace.
+- Kubernetes Service communication is working.
+- Swagger UI access is available through port forwarding.
+- Successful and failed payment scenarios have been tested.
+- Structured JSON logs are being generated.
+- Distributed trace context propagation has been verified through matching Trace IDs.
+
+### Remaining Work
+
+The next implementation phase focuses on connecting the application logs to ClickHouse.
+
+The planned work is:
+
+1. Verify the actual ClickHouse log table schema.
+2. Review the Fluent Bit configuration.
+3. Deploy Fluent Bit as a DaemonSet.
+4. Collect Kubernetes container logs.
+5. Send application logs directly to ClickHouse.
+6. Generate new successful and failed application requests.
+7. Validate the ingested logs using ClickHouse SQL queries.
+
+After log ingestion, the POC will proceed with infrastructure metrics and distributed trace ingestion through the OpenTelemetry Collector.
+
+---
+
+## 42. Important POC Notes and Limitations
+
+- This is a local functional POC using Kind.
+- The cluster contains one control-plane node.
+- ClickHouse is deployed with one shard and one replica.
+- Keeper is deployed with one replica.
+- Separate Persistent Volume Claims are configured for ClickHouse and Keeper.
+- Demo application data is stored in memory; no external application database is used.
+- Both applications run in separate Kubernetes Deployments.
+- Kubernetes Services are exposed internally through ClusterIP.
+- Browser access is provided through `kubectl port-forward`.
+- Fluent Bit will handle logs independently and send them directly to ClickHouse.
+- OpenTelemetry Collector will handle metrics and traces.
+- Application logs have been verified in Kubernetes stdout, not yet in ClickHouse.
+- Trace context propagation has been verified, but complete OTLP span export is pending.
+- Application metrics endpoints are implemented, but metrics scraping and export are pending.
+- This POC does not represent a production-grade HA deployment.
+
+## 43. Next Implementation Phase
+
+The next phase will focus on **Fluent Bit integration and application log ingestion into ClickHouse**.
+
+The implementation will follow this flow:
+
+```text
+Order API                 Payment Service
+    |                            |
+    |                            |
+    +------------+---------------+
+                 |
+                 v
+        Kubernetes Container
+             stdout
+                 |
+                 v
+          Fluent Bit
+          DaemonSet
+                 |
+                 v
+             ClickHouse
+                 |
+                 v
+           SQL Validation
+```
+
+The primary validation goal will be to confirm that logs generated by both applications are successfully collected by Fluent Bit and stored in the correct ClickHouse table.
+
+The validation will include:
+
+- INFO log ingestion.
+- ERROR log ingestion.
+- Service name extraction.
+- Timestamp validation.
+- Trace ID and Span ID preservation.
+- Querying logs by service name.
+- Querying logs by severity.
+- Correlating logs using Trace ID.
+
+**Current Milestone:** ClickHouse infrastructure, observability schema preparation, and demo microservice deployment have been completed. Both application workflows and distributed trace context propagation have been validated. The next milestone is to establish and validate the Fluent Bit-to-ClickHouse logs pipeline.

@@ -1384,41 +1384,11 @@ The ClickHouse Server uses Keeper for coordination, and both components have the
 | 30 | Validate cross-signal correlation | Pending |
 | 31 | Document POC results and findings | Pending |
 
-## 19. Next Implementation Phase
-
-The next phase will focus on preparing ClickHouse for observability data.
-
-Planned activities:
-
-1. Create the `observability` database.
-2. Create the required log, metric, and trace tables.
-3. Configure Fluent Bit to send Kubernetes container logs directly to ClickHouse.
-4. Validate log ingestion using SQL queries.
-5. Deploy Node Exporter, cAdvisor, and kube-state-metrics.
-6. Configure the OpenTelemetry Collector Prometheus Receiver.
-7. Export metrics to ClickHouse.
-8. Develop and instrument demo microservices.
-9. Send distributed traces through OTLP to the OpenTelemetry Collector.
-10. Export traces to ClickHouse.
-11. Configure Grafana to query ClickHouse.
-
-## 20. Expected Final Outcome
-
-The final outcome will be a working local Kubernetes-based unified observability POC in which:
-
-- Fluent Bit sends Kubernetes logs directly to ClickHouse.
-- OTel Collector scrapes metrics from Prometheus-compatible exporters and sends them to ClickHouse.
-- OpenTelemetry-instrumented applications send traces through OTLP to the Collector, which exports them to ClickHouse.
-- Grafana visualizes all three observability signals.
-- Logs and traces can be correlated using trace identifiers.
-
-This POC will help evaluate ClickHouse's capabilities as a centralized backend for unified observability.
-
 ---
 
 # PHASE 3: ClickHouse Schema and Demo Microservices Development
 
-## 21. Phase 3 Overview
+## 19. Phase 3 Overview
 
 The objective of Phase 3 was to prepare ClickHouse for observability data and develop two interconnected demo microservices to generate application logs, metrics, and distributed traces.
 
@@ -1443,9 +1413,9 @@ At the end of this phase, both applications were running successfully inside Kub
 
 **Important:** Application log generation and trace context propagation are validated. Actual Fluent Bit log ingestion and OpenTelemetry Collector trace export are part of the subsequent implementation phases.
 
-## 22. ClickHouse Database and Table Preparation
+## 20. ClickHouse Database and Table Preparation
 
-### 22.1 Observability Database
+### 20.1 Observability Database
 
 A dedicated database named `observability` was created in ClickHouse to store observability-related data.
 
@@ -1462,7 +1432,7 @@ The database is intended to store:
 - Metrics.
 - Distributed traces.
 
-### 22.2 Observability Table Preparation
+### 20.2 Observability Table Preparation
 
 The required ClickHouse tables were created for storing observability data.
 
@@ -1476,7 +1446,7 @@ The observability schema is intended to support:
 | Metrics | Metric name, timestamp, value, resource attributes |
 | Traces | Trace ID, span ID, parent span ID, service name, duration |
 
-### 22.3 Why Separate Tables?
+### 20.3 Why Separate Tables?
 
 Different observability signals have different data structures and query requirements.
 
@@ -1488,7 +1458,7 @@ For example:
 
 Keeping appropriate table structures for each signal makes it easier to query and analyze the data.
 
-### 22.4 Database and Table Verification
+### 20.4 Database and Table Verification
 
 Database verification:
 
@@ -1514,7 +1484,7 @@ The database and required observability table creation were completed.
 
 ---
 
-## 23. Demo Microservices Architecture
+## 21. Demo Microservices Architecture
 
 Two independent Python FastAPI applications were developed to simulate a real-world microservice communication flow.
 
@@ -1523,7 +1493,7 @@ The applications are:
 1. Order API
 2. Payment Service
 
-### 23.1 Application Architecture
+### 21.1 Application Architecture
 
 ```text
                  Client
@@ -1548,7 +1518,7 @@ The applications are:
              Client Response
 ```
 
-### 23.2 Order API Responsibilities
+### 21.2 Order API Responsibilities
 
 The Order API is responsible for:
 
@@ -1561,7 +1531,7 @@ The Order API is responsible for:
 - Creating OpenTelemetry spans.
 - Exposing application metrics.
 
-### 23.3 Payment Service Responsibilities
+### 21.3 Payment Service Responsibilities
 
 The Payment Service is responsible for:
 
@@ -1574,7 +1544,7 @@ The Payment Service is responsible for:
 - Creating OpenTelemetry spans.
 - Exposing application metrics.
 
-### 23.4 Application Communication
+### 21.4 Application Communication
 
 The Order API communicates with Payment Service using HTTP.
 
@@ -1596,9 +1566,9 @@ Therefore, the short Kubernetes Service name `payment-service` can be used for i
 
 ---
 
-## 24. Order API Implementation
+## 22. Order API Implementation
 
-### 24.1 Project Location
+### 22.1 Project Location
 
 ```text
 application/order-api/
@@ -1613,7 +1583,7 @@ order-api/
 └── Dockerfile
 ```
 
-### 24.2 Technologies Used
+### 22.2 Technologies Used
 
 | Technology | Purpose |
 |---|---|
@@ -1626,7 +1596,7 @@ order-api/
 | HTTPX Instrumentation | HTTP client instrumentation and trace propagation |
 | prometheus-client | Application metrics |
 
-### 24.3 API Endpoints
+### 22.3 API Endpoints
 
 | Method | Endpoint | Purpose |
 |---|---|---|
@@ -1636,7 +1606,7 @@ order-api/
 | POST | `/simulate-error` | Generate a test application error |
 | GET | `/metrics` | Expose Prometheus-compatible metrics |
 
-### 24.4 Order Creation Workflow
+### 22.4 Order Creation Workflow
 
 When a client sends an order request:
 
@@ -1649,7 +1619,7 @@ When a client sends an order request:
 7. Order API receives the payment response.
 8. The final order response is returned to the client.
 
-### 24.5 Payment Service URL Configuration
+### 22.5 Payment Service URL Configuration
 
 The Payment Service URL is configurable through an environment variable.
 
@@ -1670,9 +1640,9 @@ This allows the same application image to work in different environments by chan
 
 ---
 
-## 25. Payment Service Implementation
+## 23. Payment Service Implementation
 
-### 25.1 Project Location
+### 23.1 Project Location
 
 ```text
 application/payment-service/
@@ -1687,7 +1657,7 @@ payment-service/
 └── Dockerfile
 ```
 
-### 25.2 Technologies Used
+### 23.2 Technologies Used
 
 | Technology | Purpose |
 |---|---|
@@ -1698,7 +1668,7 @@ payment-service/
 | FastAPI Instrumentation | Request instrumentation |
 | prometheus-client | Application metrics |
 
-### 25.3 API Endpoints
+### 23.3 API Endpoints
 
 | Method | Endpoint | Purpose |
 |---|---|---|
@@ -1707,7 +1677,7 @@ payment-service/
 | POST | `/simulate-error` | Generate a test application error |
 | GET | `/metrics` | Expose Prometheus-compatible metrics |
 
-### 25.4 Payment Processing Logic
+### 23.4 Payment Processing Logic
 
 The Payment Service uses a simple condition to simulate successful and failed payment processing.
 
@@ -1741,9 +1711,9 @@ This condition is used to generate both successful and failed application workfl
 
 ---
 
-## 26. Python Dependencies and Virtual Environment
+## 24. Python Dependencies and Virtual Environment
 
-### 26.1 Order API Requirements
+### 24.1 Order API Requirements
 
 File:
 
@@ -1763,7 +1733,7 @@ opentelemetry-exporter-otlp
 prometheus-client
 ```
 
-### 26.2 Payment Service Requirements
+### 24.2 Payment Service Requirements
 
 File:
 
@@ -1781,7 +1751,7 @@ opentelemetry-exporter-otlp
 prometheus-client
 ```
 
-### 26.3 Python Virtual Environment
+### 24.3 Python Virtual Environment
 
 A shared Python virtual environment was created inside the application directory.
 
@@ -1808,13 +1778,13 @@ This confirmed that the required Python packages were installed and importable.
 
 ---
 
-## 27. Structured JSON Logging Implementation
+## 25. Structured JSON Logging Implementation
 
 Both applications were configured to generate structured JSON logs.
 
 Instead of generating only plain-text log messages, each application produces JSON records containing useful application and tracing information.
 
-### 27.1 Common Log Fields
+### 25.1 Common Log Fields
 
 | Field | Description |
 |---|---|
@@ -1836,7 +1806,7 @@ For example:
 - `payment_status`
 - `error_type`
 
-### 27.2 Example Order API Log
+### 25.2 Example Order API Log
 
 ```json
 {
@@ -1852,7 +1822,7 @@ For example:
 }
 ```
 
-### 27.3 Example Payment Service Error Log
+### 25.3 Example Payment Service Error Log
 
 ```json
 {
@@ -1869,7 +1839,7 @@ For example:
 }
 ```
 
-### 27.4 Why Structured JSON Logging?
+### 25.4 Why Structured JSON Logging?
 
 Structured JSON logging provides several advantages:
 
@@ -1882,11 +1852,11 @@ Structured JSON logging provides several advantages:
 
 ---
 
-## 28. OpenTelemetry Instrumentation
+## 26. OpenTelemetry Instrumentation
 
 Both microservices were instrumented using the OpenTelemetry SDK.
 
-### 28.1 OpenTelemetry Components
+### 26.1 OpenTelemetry Components
 
 The applications use:
 
@@ -1901,7 +1871,7 @@ The applications use:
 | FastAPI Instrumentation | Instruments incoming HTTP requests |
 | HTTPX Instrumentation | Instruments outgoing HTTP requests |
 
-### 28.2 Service Identification
+### 26.2 Service Identification
 
 Each application has a separate service name.
 
@@ -1919,7 +1889,7 @@ SERVICE_NAME = "payment-service"
 
 The service name is attached to the OpenTelemetry resource.
 
-### 28.3 Trace Context Propagation
+### 26.3 Trace Context Propagation
 
 The Order API uses HTTPX to communicate with Payment Service.
 
@@ -1933,7 +1903,7 @@ This instrumentation automatically propagates W3C trace context through HTTP hea
 
 The Payment Service receives the propagated context and creates its own span within the same trace.
 
-### 28.4 Trace Relationship
+### 26.4 Trace Relationship
 
 ```text
                   Trace ID
@@ -1964,25 +1934,25 @@ This variable will be configured with the OpenTelemetry Collector OTLP HTTP endp
 
 ---
 
-## 29. Application Metrics
+## 27. Application Metrics
 
 Both applications expose Prometheus-compatible metrics through their `/metrics` endpoints.
 
-### 29.1 Order API Metrics
+### 27.1 Order API Metrics
 
 | Metric | Type | Purpose |
 |---|---|---|
 | `orders_created_total` | Counter | Total orders created |
 | `order_request_duration_seconds` | Histogram | Time taken to process order requests |
 
-### 29.2 Payment Service Metrics
+### 27.2 Payment Service Metrics
 
 | Metric | Type | Purpose |
 |---|---|---|
 | `payments_processed_total` | Counter | Total payments processed, grouped by status |
 | `payment_request_duration_seconds` | Histogram | Time taken to process payment requests |
 
-### 29.3 Metrics Endpoints
+### 27.3 Metrics Endpoints
 
 Order API:
 
@@ -2002,11 +1972,11 @@ Scraping and exporting these metrics into ClickHouse through the OpenTelemetry C
 
 ---
 
-## 30. Docker Image Creation
+## 28. Docker Image Creation
 
 Both applications were containerized using separate Dockerfiles.
 
-### 30.1 Order API Dockerfile
+### 28.1 Order API Dockerfile
 
 Location:
 
@@ -2030,7 +2000,7 @@ EXPOSE 8000
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-### 30.2 Payment Service Dockerfile
+### 28.2 Payment Service Dockerfile
 
 Location:
 
@@ -2054,7 +2024,7 @@ EXPOSE 8001
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
 ```
 
-### 30.3 Container Port Configuration
+### 28.3 Container Port Configuration
 
 | Application | Container Port |
 |---|---:|
@@ -2063,7 +2033,7 @@ CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
 
 Separate container ports allow the applications to listen on different ports.
 
-### 30.4 Build Order API Image
+### 28.4 Build Order API Image
 
 ```bash
 cd ~/clickhouse-unified-poc/application/order-api
@@ -2071,7 +2041,7 @@ cd ~/clickhouse-unified-poc/application/order-api
 docker build -t order-api:poc-v1 .
 ```
 
-### 30.5 Build Payment Service Image
+### 28.5 Build Payment Service Image
 
 ```bash
 cd ~/clickhouse-unified-poc/application/payment-service
@@ -2079,7 +2049,7 @@ cd ~/clickhouse-unified-poc/application/payment-service
 docker build -t payment-service:poc-v1 .
 ```
 
-### 30.6 Verify Docker Images
+### 28.6 Verify Docker Images
 
 ```bash
 docker images | grep -E 'order-api|payment-service'
@@ -2096,13 +2066,13 @@ Both Docker images were built successfully.
 
 ---
 
-## 31. Loading Images into Kind
+## 29. Loading Images into Kind
 
 The locally built images were loaded into the Kind cluster.
 
 This allows Kubernetes to use the local images without pulling them from Docker Hub.
 
-### 31.1 Verify Active Kubernetes Context
+### 29.1 Verify Active Kubernetes Context
 
 ```bash
 kubectl config get-contexts
@@ -2114,14 +2084,14 @@ Active context:
 kind-clickhouse-unified-poc
 ```
 
-### 31.2 Load Order API Image
+### 29.2 Load Order API Image
 
 ```bash
 kind load docker-image order-api:poc-v1 \
   --name clickhouse-unified-poc
 ```
 
-### 31.3 Load Payment Service Image
+### 29.3 Load Payment Service Image
 
 ```bash
 kind load docker-image payment-service:poc-v1 \
@@ -2134,9 +2104,9 @@ Both images were loaded into the target Kind cluster.
 
 ---
 
-## 32. Kubernetes Application Deployment
+## 30. Kubernetes Application Deployment
 
-### 32.1 Application Namespace
+### 30.1 Application Namespace
 
 The `applications` namespace was already available in the cluster.
 
@@ -2167,7 +2137,7 @@ No resources found in applications namespace.
 
 Both microservices were subsequently deployed into this namespace.
 
-### 32.2 Order API Kubernetes Manifest
+### 30.2 Order API Kubernetes Manifest
 
 File:
 
@@ -2220,7 +2190,7 @@ spec:
       protocol: TCP
 ```
 
-### 32.3 Payment Service Kubernetes Manifest
+### 30.3 Payment Service Kubernetes Manifest
 
 File:
 
@@ -2270,7 +2240,7 @@ spec:
       protocol: TCP
 ```
 
-### 32.4 Kubernetes Manifest Validation
+### 30.4 Kubernetes Manifest Validation
 
 Before applying the manifests, a client-side dry run was performed.
 
@@ -2291,7 +2261,7 @@ service/payment-service created (dry run)
 
 All four resources passed dry-run validation.
 
-### 32.5 Deploy Applications
+### 30.5 Deploy Applications
 
 ```bash
 kubectl apply \
@@ -2312,9 +2282,9 @@ Both Deployments and Services were successfully created.
 
 ---
 
-## 33. Kubernetes Pod and Service Validation
+## 31. Kubernetes Pod and Service Validation
 
-### 33.1 Pod Validation
+### 31.1 Pod Validation
 
 Command:
 
@@ -2332,7 +2302,7 @@ payment-service-7c86795b68-s4dhr   1/1     Running
 
 Both application Pods reached the Running state.
 
-### 33.2 ImagePullBackOff Issue
+### 31.2 ImagePullBackOff Issue
 
 During the initial Payment Service deployment, the Pod entered the `ImagePullBackOff` state.
 
@@ -2353,7 +2323,7 @@ kind load docker-image payment-service:poc-v1 \
 
 After the image was available, the Payment Service Pod started successfully.
 
-### 33.3 Service Validation
+### 31.3 Service Validation
 
 Command:
 
@@ -2380,7 +2350,7 @@ Both Services are available inside the Kubernetes cluster.
 
 ---
 
-## 34. Internal Kubernetes Communication Validation
+## 32. Internal Kubernetes Communication Validation
 
 Internal communication between the two microservices was tested from inside the Order API Pod.
 
@@ -2410,13 +2380,13 @@ This confirms:
 
 ---
 
-## 35. Swagger UI and Browser Access
+## 33. Swagger UI and Browser Access
 
 Both applications provide Swagger UI through FastAPI.
 
 Kubernetes Services are configured as ClusterIP, so `kubectl port-forward` is used to access them locally.
 
-### 35.1 Order API Port Forwarding
+### 34.1 Order API Port Forwarding
 
 Run in Terminal 1:
 
@@ -2432,7 +2402,7 @@ Browser URL:
 http://localhost:8000/docs
 ```
 
-### 35.2 Payment Service Port Forwarding
+### 34.2 Payment Service Port Forwarding
 
 Run in Terminal 2:
 
@@ -2452,14 +2422,14 @@ Both port-forward processes must remain running while accessing their respective
 
 ---
 
-## 36. Application End-to-End Testing
+## 35. Application End-to-End Testing
 
 Two application scenarios were validated through the Order API Swagger UI.
 
 1. Successful payment.
 2. Failed payment.
 
-### 36.1 Successful Payment Scenario
+### 35.1 Successful Payment Scenario
 
 Request:
 
@@ -2499,7 +2469,7 @@ SUCCESS
 
 The successful application workflow was validated.
 
-### 36.2 Failed Payment Scenario
+### 35.2 Failed Payment Scenario
 
 Request:
 
@@ -2552,11 +2522,11 @@ The failed payment scenario was validated successfully.
 
 ---
 
-## 37. Application Log Verification
+## 36. Application Log Verification
 
 Application logs were inspected directly from Kubernetes using `kubectl logs`.
 
-### 37.1 Payment Service Logs
+### 36.1 Payment Service Logs
 
 Command:
 
@@ -2594,7 +2564,7 @@ The application returned:
 POST /payments HTTP/1.1" 400 Bad Request
 ```
 
-### 37.2 Order API Logs
+### 36.2 Order API Logs
 
 Command:
 
@@ -2635,7 +2605,7 @@ POST /orders HTTP/1.1" 502 Bad Gateway
 
 ---
 
-## 38. Distributed Trace Context Propagation Validation
+## 37. Distributed Trace Context Propagation Validation
 
 The two microservices were instrumented using OpenTelemetry.
 
@@ -2645,7 +2615,7 @@ When it calls Payment Service, HTTPX instrumentation propagates the W3C trace co
 
 Payment Service receives this context and generates its own span within the same distributed trace.
 
-### 38.1 Trace Correlation Architecture
+### 37.1 Trace Correlation Architecture
 
 ```text
                 Distributed Trace
@@ -2667,7 +2637,7 @@ Payment Service receives this context and generates its own span within the same
                 Same Trace ID
 ```
 
-### 38.2 Failed Payment Trace Verification
+### 37.2 Failed Payment Trace Verification
 
 For the failed payment scenario, both applications generated the following Trace ID:
 
@@ -2691,7 +2661,7 @@ Trace ID: 19f538ceb85f2ab83b81df829f2f6dca
 Span ID: 0d93d73328f4d2a1
 ```
 
-### 38.3 Trace Correlation Result
+### 37.3 Trace Correlation Result
 
 | Attribute | Order API | Payment Service |
 |---|---|---|
@@ -2702,7 +2672,7 @@ Span ID: 0d93d73328f4d2a1
 | Error Message | Payment processing failed | Payment processing failed |
 | Error Type | HTTP 400 from Payment Service | PAYMENT_DECLINED |
 
-### 38.4 Interpretation
+### 37.4 Interpretation
 
 The same Trace ID across both applications confirms that distributed trace context propagation is working.
 
@@ -2722,7 +2692,7 @@ Actual trace ingestion remains pending.
 
 ---
 
-## 39. Phase 3 Validation Summary
+## 38. Phase 3 Validation Summary
 
 | Validation | Result |
 |---|---|
@@ -2755,7 +2725,7 @@ Actual trace ingestion remains pending.
 
 ---
 
-## 40. Updated Implementation Roadmap
+## 39. Updated Implementation Roadmap
 
 | No. | Task | Status |
 |---|---|---|
@@ -2807,7 +2777,7 @@ Actual trace ingestion remains pending.
 
 ---
 
-## 41. Current Implementation Status
+## 40. Current Implementation Status
 
 At the completion of Phase 3:
 
@@ -2841,7 +2811,7 @@ After log ingestion, the POC will proceed with infrastructure metrics and distri
 
 ---
 
-## 42. Important POC Notes and Limitations
+## 41. Important POC Notes and Limitations
 
 - This is a local functional POC using Kind.
 - The cluster contains one control-plane node.
@@ -2859,7 +2829,7 @@ After log ingestion, the POC will proceed with infrastructure metrics and distri
 - Application metrics endpoints are implemented, but metrics scraping and export are pending.
 - This POC does not represent a production-grade HA deployment.
 
-## 43. Next Implementation Phase
+## 42. Next Implementation Phase
 
 The next phase will focus on **Fluent Bit integration and application log ingestion into ClickHouse**.
 
@@ -2903,7 +2873,7 @@ The validation will include:
 
 # PHASE 4: Fluent Bit Integration and ClickHouse Log Ingestion
 
-## 44. Phase 4 Overview
+## 43. Phase 4 Overview
 
 The objective of Phase 4 was to implement the Kubernetes log collection pipeline using Fluent Bit and send container logs directly to ClickHouse.
 
@@ -2919,7 +2889,7 @@ This phase focused on:
 
 At the end of this phase, Fluent Bit was successfully deployed as a DaemonSet, and Kubernetes container logs were being ingested into ClickHouse.
 
-## 45. Logging Pipeline Architecture
+## 44. Logging Pipeline Architecture
 
 The following architecture was implemented for log ingestion:
 
@@ -2963,7 +2933,7 @@ The following architecture was implemented for log ingestion:
 
 **Important:** Fluent Bit sends logs directly to ClickHouse. The OpenTelemetry Collector is not involved in this logging pipeline. It will be used separately for metrics and traces.
 
-## 46. ClickHouse Log Table Creation
+## 45. ClickHouse Log Table Creation
 
 A dedicated table named `kubernetes_logs` was created inside the `observability` database.
 
@@ -3017,7 +2987,7 @@ ORDER BY (namespace, pod_name, timestamp);
 - `LowCardinality(String)` is used for frequently repeated string values such as namespace, container name, and log level.
 - The schema supports both structured application logs and plain-text infrastructure logs.
 
-## 47. Fluent Bit Installation and Helm Configuration
+## 46. Fluent Bit Installation and Helm Configuration
 
 Fluent Bit was deployed using its official Helm chart.
 
@@ -3069,7 +3039,7 @@ helm lint ~/clickhouse-unified-poc/helm/fluent-bit-0.58.3.tgz \
 
 The Helm templates were also rendered and inspected before deployment.
 
-## 48. Fluent Bit Input Configuration
+## 47. Fluent Bit Input Configuration
 
 Fluent Bit uses the Tail input plugin to collect Kubernetes container logs.
 
@@ -3094,7 +3064,7 @@ Fluent Bit uses the Tail input plugin to collect Kubernetes container logs.
 
 The Tail input plugin is responsible for collecting log records. It does not perform Kubernetes metadata enrichment or ClickHouse transformation.
 
-## 49. Kubernetes Filter Configuration
+## 48. Kubernetes Filter Configuration
 
 The Kubernetes filter enriches collected logs with Kubernetes metadata.
 
@@ -3121,7 +3091,7 @@ The Kubernetes filter enriches collected logs with Kubernetes metadata.
 
 This filter helps attach Kubernetes metadata such as namespace, pod name, and container name to each log record.
 
-## 50. Lua Transformation and Its Purpose
+## 49. Lua Transformation and Its Purpose
 
 A custom Lua script was implemented to transform Fluent Bit records into the required ClickHouse table structure.
 
@@ -3259,7 +3229,7 @@ return 2, timestamp, output
 
 Return code `2` tells Fluent Bit to replace the original record with the transformed record while retaining the event timestamp.
 
-## 51. Fluent Bit Lua Filter Configuration
+## 50. Fluent Bit Lua Filter Configuration
 
 The Lua script is connected to Fluent Bit using the Lua filter.
 
@@ -3280,7 +3250,7 @@ The Lua script is connected to Fluent Bit using the Lua filter.
 
 The Lua filter processes the records after the Kubernetes filter has enriched them.
 
-## 52. Fluent Bit HTTP Output Configuration
+## 51. Fluent Bit HTTP Output Configuration
 
 Fluent Bit sends transformed records directly to ClickHouse through its HTTP interface.
 
@@ -3305,7 +3275,7 @@ Fluent Bit sends transformed records directly to ClickHouse through its HTTP int
 
 The Fluent Bit output sends data to ClickHouse without routing it through the OpenTelemetry Collector.
 
-## 53. Fluent Bit Deployment in Kubernetes
+## 52. Fluent Bit Deployment in Kubernetes
 
 Fluent Bit was deployed in the `logging` namespace as a DaemonSet.
 
@@ -3352,7 +3322,7 @@ Ok.
 
 This confirmed that Fluent Bit's namespace could reach the ClickHouse HTTP service.
 
-## 54. Log Ingestion Validation in ClickHouse
+## 53. Log Ingestion Validation in ClickHouse
 
 After deploying Fluent Bit, log ingestion was validated using SQL queries.
 
@@ -3404,7 +3374,7 @@ LIMIT 20;
 
 This query was used to inspect recent records and validate the transformed table structure.
 
-## 55. Application Log Ingestion Validation
+## 54. Application Log Ingestion Validation
 
 The Order API and Payment Service were tested to generate application logs.
 
@@ -3439,7 +3409,7 @@ The validation confirmed that:
 - Trace IDs and span IDs were available in the corresponding application log records.
 - Original log content was preserved in `raw_log`.
 
-## 56. Successful and Failed Payment Log Validation
+## 55. Successful and Failed Payment Log Validation
 
 Both successful and failed payment scenarios were tested to validate application log ingestion.
 
@@ -3466,7 +3436,7 @@ Observed behavior:
 
 # Phase 5: Metrics Collection and Ingestion Using OpenTelemetry Collector
 
-## 59. Phase Overview
+## 56. Phase Overview
 
 The objective of Phase 5 is to collect infrastructure-level, Kubernetes-level, and application-level metrics and store them in ClickHouse.
 
@@ -3501,7 +3471,7 @@ This reduces the number of components required for the POC.
 
 ---
 
-## 60. Metrics Pipeline Architecture
+## 57. Metrics Pipeline Architecture
 
 ```text
                     Kubernetes Cluster
@@ -3572,7 +3542,7 @@ This reduces the number of components required for the POC.
 
 ---
 
-## 61. Namespace and Component Details
+## 58. Namespace and Component Details
 
 The following namespaces are used:
 
@@ -3599,7 +3569,7 @@ The following namespaces are used:
 
 ---
 
-## 62. OpenTelemetry Collector RBAC Configuration
+## 59. OpenTelemetry Collector RBAC Configuration
 
 The Collector needs permission to access the Kubernetes API Server's node proxy endpoint to scrape cAdvisor metrics.
 
@@ -3758,7 +3728,7 @@ This confirms that the Collector ServiceAccount has permission to access the Nod
 
 ---
 
-## 63. OpenTelemetry Collector Helm Values Configuration
+## 60. OpenTelemetry Collector Helm Values Configuration
 
 The OpenTelemetry Collector is deployed using the official OpenTelemetry Helm chart.
 
@@ -3880,9 +3850,9 @@ config:
 
 ---
 
-## 64. Explanation of OpenTelemetry Collector YAML
+## 61. Explanation of OpenTelemetry Collector YAML
 
-### 64.1 Deployment Mode
+### 61.1 Deployment Mode
 
 ```yaml
 mode: deployment
@@ -3896,7 +3866,7 @@ A Deployment is appropriate here because the Collector acts as a central metrics
 
 It is different from DaemonSet mode, where an instance runs on each Kubernetes node.
 
-### 64.2 Image Configuration
+### 61.2 Image Configuration
 
 ```yaml
 image:
@@ -3911,7 +3881,7 @@ image:
 
 The Contrib distribution is used because it contains additional receivers and exporters, including the Prometheus Receiver and ClickHouse Exporter.
 
-### 64.3 Command Configuration
+### 61.3 Command Configuration
 
 ```yaml
 command:
@@ -3922,7 +3892,7 @@ Specifies the Collector executable.
 
 The Contrib image uses `otelcol-contrib`.
 
-### 64.4 Replica Count
+### 61.4 Replica Count
 
 ```yaml
 replicaCount: 1
@@ -3934,7 +3904,7 @@ This is sufficient for the current single-node POC.
 
 For production environments, Collector replicas and workload distribution should be planned according to availability and throughput requirements.
 
-### 64.5 ServiceAccount Configuration
+### 61.5 ServiceAccount Configuration
 
 ```yaml
 serviceAccount:
@@ -3951,7 +3921,7 @@ The token is required to authenticate requests to the Kubernetes API Server.
 
 The Collector uses this token to access the cAdvisor proxy endpoint.
 
-### 64.6 Resource Requests and Limits
+### 61.6 Resource Requests and Limits
 
 ```yaml
 resources:
@@ -3980,7 +3950,7 @@ These are POC resource values and should be reviewed under production load.
 
 ---
 
-## 65. Exporter Configuration
+## 62. Exporter Configuration
 
 The exporter sends collected metrics to ClickHouse.
 
@@ -4076,7 +4046,7 @@ Defines the exporter operation timeout.
 
 ---
 
-## 66. Prometheus Receiver Configuration
+## 63. Prometheus Receiver Configuration
 
 The Prometheus Receiver scrapes metrics from Prometheus-compatible endpoints.
 
@@ -4089,7 +4059,7 @@ receivers:
 
 The `scrape_configs` section defines which endpoints should be scraped and how frequently.
 
-### 66.1 Node Exporter Scrape Configuration
+### 63.1 Node Exporter Scrape Configuration
 
 ```yaml
 - job_name: node-exporter
@@ -4116,7 +4086,7 @@ Examples:
 - Network traffic
 - Disk statistics
 
-### 66.2 kube-state-metrics Scrape Configuration
+### 63.2 kube-state-metrics Scrape Configuration
 
 ```yaml
 - job_name: kube-state-metrics
@@ -4138,7 +4108,7 @@ Examples:
 
 These metrics help understand the current state of Kubernetes resources.
 
-### 66.3 Order API Scrape Configuration
+### 63.3 Order API Scrape Configuration
 
 ```yaml
 - job_name: order-api
@@ -4164,7 +4134,7 @@ Custom application metrics include:
 
 These metrics help monitor application activity and request performance.
 
-### 66.4 Payment Service Scrape Configuration
+### 63.4 Payment Service Scrape Configuration
 
 ```yaml
 - job_name: payment-service
@@ -4190,7 +4160,7 @@ Custom metrics include:
 
 These metrics help monitor payment processing activity and application performance.
 
-### 66.5 cAdvisor Scrape Configuration
+### 63.5 cAdvisor Scrape Configuration
 
 ```yaml
 - job_name: cadvisor
@@ -4257,7 +4227,7 @@ The target is the internal Kubernetes API Server Service.
 
 ---
 
-## 67. Processor Configuration
+## 64. Processor Configuration
 
 The metrics pipeline uses two processors:
 
@@ -4283,7 +4253,7 @@ The current configuration uses the chart's processor defaults.
 
 ---
 
-## 68. Service Pipeline Configuration
+## 65. Service Pipeline Configuration
 
 OpenTelemetry Collector uses pipelines to connect receivers, processors, and exporters.
 
@@ -4293,7 +4263,7 @@ A pipeline has three major components:
 Receiver -> Processor -> Exporter
 ```
 
-### 68.1 Metrics Pipeline
+### 65.1 Metrics Pipeline
 
 ```yaml
 metrics:
@@ -4316,7 +4286,7 @@ It processes them using memory_limiter and batch processors and exports them to 
 
 The Prometheus Receiver is responsible for the five scrape jobs configured in this POC.
 
-### 68.2 Logs Pipeline
+### 65.2 Logs Pipeline
 
 ```yaml
 logs:
@@ -4335,7 +4305,7 @@ This is not the primary logs ingestion path in our architecture.
 
 Fluent Bit continues to send Kubernetes logs directly to ClickHouse.
 
-### 68.3 Traces Pipeline
+### 65.3 Traces Pipeline
 
 ```yaml
 traces:
@@ -4358,9 +4328,9 @@ It will be handled in the distributed tracing phase.
 
 ---
 
-## 69. Helm Installation
+## 66. Helm Installation
 
-### 69.1 Add OpenTelemetry Helm Repository
+### 66.1 Add OpenTelemetry Helm Repository
 
 ```bash
 helm repo add open-telemetry \
@@ -4369,7 +4339,7 @@ helm repo add open-telemetry \
 
 This adds the official OpenTelemetry Helm repository.
 
-### 69.2 Update Helm Repository
+### 66.2 Update Helm Repository
 
 ```bash
 helm repo update
@@ -4377,7 +4347,7 @@ helm repo update
 
 Downloads the latest repository metadata.
 
-### 69.3 Verify Chart Version
+### 66.3 Verify Chart Version
 
 ```bash
 helm search repo open-telemetry/opentelemetry-collector --versions
@@ -4389,13 +4359,13 @@ The chart version used in this POC:
 0.178.3
 ```
 
-### 69.4 Apply RBAC
+### 66.4 Apply RBAC
 
 ```bash
 kubectl apply -f configs/otel-collector-rbac.yaml
 ```
 
-### 69.5 Install OpenTelemetry Collector
+### 66.5 Install OpenTelemetry Collector
 
 ```bash
 helm upgrade --install otel-collector \
@@ -4418,7 +4388,7 @@ Explanation:
 - --wait: Waits for Kubernetes resources to become ready.
 - --timeout: Sets the maximum wait time.
 
-### 69.6 Verify Helm Release
+### 66.6 Verify Helm Release
 
 ```bash
 helm list -n opentelemetry
@@ -4430,7 +4400,7 @@ Expected release:
 otel-collector
 ```
 
-### 69.7 Verify Collector Pod
+### 66.7 Verify Collector Pod
 
 ```bash
 kubectl get pods -n opentelemetry
@@ -4442,7 +4412,7 @@ Expected status:
 1/1 Running
 ```
 
-### 69.8 Verify Deployment
+### 66.8 Verify Deployment
 
 ```bash
 kubectl get deployment -n opentelemetry
@@ -4455,7 +4425,7 @@ READY   UP-TO-DATE   AVAILABLE
 1/1     1            1
 ```
 
-### 69.9 Verify Collector Service
+### 66.9 Verify Collector Service
 
 ```bash
 kubectl get svc -n opentelemetry
@@ -4474,7 +4444,7 @@ The Prometheus Receiver is used internally by the Collector to scrape configured
 
 ---
 
-## 70. Collector Logs Validation
+## 67. Collector Logs Validation
 
 Check Collector logs:
 
@@ -4511,7 +4481,7 @@ This indicates that no log lines matching these keywords were found in the check
 
 ---
 
-## 71. ClickHouse Metrics Tables
+## 68. ClickHouse Metrics Tables
 
 The ClickHouse Exporter automatically created the metrics tables because:
 
@@ -4592,7 +4562,7 @@ No exponential histogram records were observed in this POC validation.
 
 ---
 
-## 72. Verify Metrics Record Counts
+## 69. Verify Metrics Record Counts
 
 Run:
 
@@ -4623,7 +4593,7 @@ Note: `system.tables.total_rows` is metadata and may be approximate for MergeTre
 
 ---
 
-## 73. Inspect Actual Gauge Metric Records
+## 70. Inspect Actual Gauge Metric Records
 
 Command:
 
@@ -4663,7 +4633,7 @@ The record also contained resource attributes identifying the Kubernetes API Ser
 
 ---
 
-## 74. Verify Gauge Metrics by Service
+## 71. Verify Gauge Metrics by Service
 
 Command:
 
@@ -4694,7 +4664,7 @@ All five configured services had gauge metrics stored in ClickHouse.
 
 ---
 
-## 75. Verify Sum Metrics by Service
+## 72. Verify Sum Metrics by Service
 
 Command:
 
@@ -4725,7 +4695,7 @@ All five services also had sum metrics stored in ClickHouse.
 
 ---
 
-## 76. Verify Application Custom Counters
+## 73. Verify Application Custom Counters
 
 The Order API and Payment Service expose custom application metrics.
 
@@ -4803,7 +4773,7 @@ The latest samples confirmed that both application counters were being scraped a
 
 ---
 
-## 77. Validate Recent Metrics Ingestion
+## 74. Validate Recent Metrics Ingestion
 
 To confirm that metrics are being updated continuously, query records from the last five minutes.
 
@@ -4841,7 +4811,7 @@ This validates that the metrics pipeline was actively receiving data during the 
 
 ---
 
-## 78. Final Phase 5 Validation
+## 75. Final Phase 5 Validation
 
 ### Validation Summary
 
@@ -4890,7 +4860,7 @@ The five-minute ingestion query confirmed that all five sources continued produc
 
 ---
 
-## 79. Current Architecture Status and Next Phase
+## 76. Current Architecture Status and Next Phase
 
 The POC now has three planned telemetry pipelines:
 
@@ -4918,7 +4888,7 @@ The final objective is to provide a unified observability backend using ClickHou
 
 ---
 
-## 80. Important POC Limitations
+## 77. Important POC Limitations
 
 The following limitations should be considered when interpreting the results:
 
@@ -4934,7 +4904,7 @@ The following limitations should be considered when interpreting the results:
 
 # Phase 6: Distributed Tracing Implementation Using OpenTelemetry and ClickHouse
 
-## 81. Phase 6 Overview
+## 78. Phase 6 Overview
 
 In Phase 6, we implemented and validated distributed tracing for the Order API and Payment Service applications using OpenTelemetry.
 
@@ -4960,9 +4930,9 @@ This phase extends the existing observability architecture:
 
 ---
 
-## 82. Distributed Tracing Architecture
+## 79. Distributed Tracing Architecture
 
-### 82.1 Architecture Flow
+### 79.1 Architecture Flow
 
 The distributed tracing pipeline follows this architecture:
 
@@ -5021,7 +4991,7 @@ The distributed tracing pipeline follows this architecture:
               ParentSpanId
 ```
 
-### 82.2 Component Responsibilities
+### 79.2 Component Responsibilities
 
 | Component | Responsibility |
 |---|---|
@@ -5035,7 +5005,7 @@ The distributed tracing pipeline follows this architecture:
 | ClickHouse Exporter | Writes trace records into ClickHouse |
 | ClickHouse | Stores and makes trace data available for querying |
 
-### 82.3 Why Distributed Tracing?
+### 79.3 Why Distributed Tracing?
 
 In a microservices architecture, a single user request can pass through multiple services.
 
@@ -5060,11 +5030,11 @@ Distributed tracing helps us identify:
 
 ---
 
-## 83. Understanding Trace ID, Span ID and Parent Span ID
+## 80. Understanding Trace ID, Span ID and Parent Span ID
 
 Before configuring distributed tracing, it is important to understand three identifiers.
 
-### 83.1 Trace ID
+### 80.1 Trace ID
 
 A Trace ID uniquely identifies an entire distributed request.
 
@@ -5079,7 +5049,7 @@ The same Trace ID is propagated across Order API and Payment Service.
 
 This allows us to correlate all spans generated during a single request.
 
-### 83.2 Span ID
+### 80.2 Span ID
 
 A Span ID identifies an individual operation inside a distributed request.
 
@@ -5095,7 +5065,7 @@ Span ID = a26a453bbcf89e54
 
 Each span has its own Span ID.
 
-### 83.3 Parent Span ID
+### 80.3 Parent Span ID
 
 Parent Span ID identifies the operation that initiated the current operation.
 
@@ -5118,7 +5088,7 @@ Here, the Payment Service server span references the Order API client span as it
 
 This establishes the parent-child relationship between operations.
 
-### 83.4 Difference Between These Identifiers
+### 80.4 Difference Between These Identifiers
 
 | Identifier | Purpose |
 |---|---|
@@ -5128,13 +5098,13 @@ This establishes the parent-child relationship between operations.
 
 ---
 
-## 84. Application-Level OpenTelemetry Configuration
+## 81. Application-Level OpenTelemetry Configuration
 
 Both applications already had OpenTelemetry SDK instrumentation implemented in their Python application code.
 
 During Phase 6, we inspected this implementation and verified that the applications could export traces when an OTLP endpoint was configured.
 
-### 84.1 Inspecting Order API and Payment Service
+### 81.1 Inspecting Order API and Payment Service
 
 We executed:
 
@@ -5156,7 +5126,7 @@ This command searches for important OpenTelemetry implementation components.
 | trace_id | Identifies the distributed trace |
 | span_id | Identifies an individual span |
 
-### 84.2 Order API OpenTelemetry Implementation
+### 81.2 Order API OpenTelemetry Implementation
 
 The Order API already contained:
 
@@ -5210,7 +5180,7 @@ FastAPI instrumentation generates spans for incoming HTTP requests.
 
 HTTPX instrumentation generates spans for outgoing HTTP requests, such as the call from Order API to Payment Service.
 
-### 84.3 Payment Service OpenTelemetry Implementation
+### 81.3 Payment Service OpenTelemetry Implementation
 
 Payment Service follows the same tracing architecture.
 
@@ -5243,13 +5213,13 @@ Both applications already contained the necessary SDK instrumentation. Therefore
 
 ---
 
-## 85. OpenTelemetry Collector Configuration Changes
+## 82. OpenTelemetry Collector Configuration Changes
 
 The OpenTelemetry Collector was already deployed during Phase 5 for metrics ingestion.
 
 During Phase 6, we extended its existing configuration to send traces to ClickHouse.
 
-### 85.1 Existing Collector Deployment
+### 82.1 Existing Collector Deployment
 
 Collector namespace:
 
@@ -5287,7 +5257,7 @@ Configuration file:
 ~/clickhouse-unified-poc/configs/otel-collector-values.yaml
 ```
 
-### 85.2 Existing ClickHouse Exporter
+### 82.2 Existing ClickHouse Exporter
 
 The Collector already had a ClickHouse exporter configured for metrics.
 
@@ -5319,7 +5289,7 @@ Explanation:
 
 The ClickHouse exporter writes traces into the `observability` database.
 
-### 85.3 OTLP Receiver
+### 82.3 OTLP Receiver
 
 The Collector receives trace data through the OTLP receiver.
 
@@ -5332,7 +5302,7 @@ Our Python applications use the OTLP HTTP exporter.
 
 Therefore, we selected port 4318.
 
-### 85.4 Traces Pipeline Configuration Change
+### 82.4 Traces Pipeline Configuration Change
 
 Initially, the traces pipeline used the debug exporter.
 
@@ -5385,7 +5355,7 @@ The logs pipeline continued using the debug exporter because Kubernetes applicat
 
 We did not change the Fluent Bit logging pipeline.
 
-### 85.5 Validate Collector Helm Configuration
+### 82.5 Validate Collector Helm Configuration
 
 Before upgrading the Collector, we rendered the Helm templates.
 
@@ -5409,7 +5379,7 @@ Expected result:
 
 This confirmed that Helm could render the configuration successfully.
 
-### 85.6 Upgrade the Collector
+### 82.6 Upgrade the Collector
 
 We upgraded the existing Collector release.
 
@@ -5439,7 +5409,7 @@ The Helm upgrade completed successfully.
 
 The release revision was updated to revision 2.
 
-### 85.7 Verify Collector Pod
+### 82.7 Verify Collector Pod
 
 Command:
 
@@ -5465,7 +5435,7 @@ Restarts:
 0
 ```
 
-### 85.8 Verify Collector Logs
+### 82.8 Verify Collector Logs
 
 Command:
 
@@ -5491,7 +5461,7 @@ The Collector startup logs confirmed that the configuration loaded and the recei
 
 ---
 
-## 86. Configure OTLP Endpoint in Application Deployments
+## 83. Configure OTLP Endpoint in Application Deployments
 
 After configuring the Collector, we connected both applications to its OTLP HTTP endpoint.
 
@@ -5519,7 +5489,7 @@ Complete OTLP HTTP traces endpoint:
 http://otel-collector-opentelemetry-collector.opentelemetry.svc.cluster.local:4318/v1/traces
 ```
 
-### 86.1 Why Port 4318?
+### 83.1 Why Port 4318?
 
 OTLP supports two common transport protocols:
 
@@ -5536,7 +5506,7 @@ opentelemetry.exporter.otlp.proto.http.trace_exporter.OTLPSpanExporter
 
 Therefore, we configured the HTTP endpoint on port 4318.
 
-### 86.2 Update Order API Deployment
+### 83.2 Update Order API Deployment
 
 Configuration file:
 
@@ -5570,7 +5540,7 @@ Explanation:
 - `PAYMENT_SERVICE_URL` continues to connect Order API to Payment Service.
 - `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` tells the OpenTelemetry SDK where to export trace spans.
 
-### 86.3 Update Payment Service Deployment
+### 83.3 Update Payment Service Deployment
 
 Configuration file:
 
@@ -5588,7 +5558,7 @@ env:
 
 This enables Payment Service to export its spans to the same Collector endpoint.
 
-### 86.4 Validate Deployment YAML
+### 83.4 Validate Deployment YAML
 
 Before applying the changes, we validated both manifests.
 
@@ -5611,7 +5581,7 @@ service/payment-service unchanged (dry run)
 
 This confirmed that both deployment manifests were valid.
 
-### 86.5 Apply the Updated Manifests
+### 83.5 Apply the Updated Manifests
 
 Command:
 
@@ -5632,7 +5602,7 @@ service/payment-service unchanged
 
 Both deployments were updated successfully.
 
-### 86.6 Verify Deployment Rollouts
+### 83.6 Verify Deployment Rollouts
 
 Commands:
 
@@ -5652,7 +5622,7 @@ deployment "payment-service" successfully rolled out
 
 Both applications restarted with the updated environment variables.
 
-### 86.7 Verify OTLP Environment Variables
+### 83.7 Verify OTLP Environment Variables
 
 We verified the endpoint inside both running application containers.
 
@@ -5680,11 +5650,11 @@ This confirmed that both running applications had the correct OTLP endpoint conf
 
 ---
 
-## 87. Generate Application Traces
+## 84. Generate Application Traces
 
 After configuring both applications, we generated actual application traffic to validate trace collection.
 
-### 87.1 Port Forward Order API
+### 84.1 Port Forward Order API
 
 We exposed the Order API locally using Kubernetes port-forwarding.
 
@@ -5706,7 +5676,7 @@ This allowed us to access the application through:
 http://localhost:8000
 ```
 
-### 87.2 Access Swagger UI
+### 84.2 Access Swagger UI
 
 We opened the following URL in the browser:
 
@@ -5735,13 +5705,13 @@ We tested two scenarios.
 
 ---
 
-## 88. Test Scenario 1: Successful Payment
+## 85. Test Scenario 1: Successful Payment
 
-### 88.1 Objective
+### 85.1 Objective
 
 The objective was to generate a successful distributed request involving both Order API and Payment Service.
 
-### 88.2 Request Body
+### 85.2 Request Body
 
 We submitted the following request through Swagger UI:
 
@@ -5752,7 +5722,7 @@ We submitted the following request through Swagger UI:
 }
 ```
 
-### 88.3 Expected Application Flow
+### 85.3 Expected Application Flow
 
 ```text
 Client
@@ -5773,7 +5743,7 @@ Order API
 HTTP 200 Response
 ```
 
-### 88.4 Observed Result
+### 85.4 Observed Result
 
 The API returned:
 
@@ -5794,15 +5764,15 @@ The successful request generated trace data from both services.
 
 ---
 
-## 89. Test Scenario 2: Failed Payment
+## 86. Test Scenario 2: Failed Payment
 
-### 89.1 Objective
+### 86.1 Objective
 
 The objective was to generate an error scenario and verify whether the distributed trace captured the failure across both services.
 
 The Payment Service rejects payment requests when the amount is greater than or equal to 10,000.
 
-### 89.2 Request Body
+### 86.2 Request Body
 
 We submitted:
 
@@ -5813,7 +5783,7 @@ We submitted:
 }
 ```
 
-### 89.3 Expected Application Flow
+### 86.3 Expected Application Flow
 
 ```text
 Client
@@ -5834,7 +5804,7 @@ Order API
 HTTP 502 Response
 ```
 
-### 89.4 Observed Result
+### 86.4 Observed Result
 
 The API returned:
 
@@ -5856,11 +5826,11 @@ The resulting trace contained error-status spans from both Order API and Payment
 
 ---
 
-## 90. Verify Trace Tables in ClickHouse
+## 87. Verify Trace Tables in ClickHouse
 
 After generating application traffic, we verified whether the Collector created the trace tables in ClickHouse.
 
-### 90.1 Show Observability Tables
+### 87.1 Show Observability Tables
 
 Command:
 
@@ -5883,7 +5853,7 @@ otel_traces_trace_id_ts
 otel_traces_trace_id_ts_mv
 ```
 
-### 90.2 Trace Table Explanation
+### 87.2 Trace Table Explanation
 
 **otel_traces**
 
@@ -5903,7 +5873,7 @@ However, table creation alone does not prove that spans were inserted. We perfor
 
 ---
 
-## 91. Inspect the Trace Table Schema
+## 88. Inspect the Trace Table Schema
 
 We inspected the ClickHouse trace table structure.
 
@@ -5948,11 +5918,11 @@ These fields support detailed trace analysis.
 
 ---
 
-## 92. Validate Trace Ingestion by Service
+## 89. Validate Trace Ingestion by Service
 
 After confirming the table schema, we checked whether both services were exporting spans.
 
-### 92.1 Query
+### 89.1 Query
 
 ```sql
 SELECT
@@ -5965,7 +5935,7 @@ GROUP BY ServiceName
 ORDER BY ServiceName;
 ```
 
-### 92.2 Execute Query from Kubernetes
+### 89.2 Execute Query from Kubernetes
 
 ```bash
 kubectl exec -it -n clickhouse clickhouse-clickhouse-0-0-0 -- \
@@ -5981,7 +5951,7 @@ ORDER BY ServiceName
 "
 ```
 
-### 92.3 Observed Results
+### 89.3 Observed Results
 
 ```text
 order-api        90    28    2026-11-22 21:13:40.672734049
@@ -5993,7 +5963,7 @@ payment-service  79    25    2026-11-22 21:13:43.704828818
 | Order API | 90 | 28 |
 | Payment Service | 79 | 25 |
 
-### 92.4 Interpretation
+### 89.4 Interpretation
 
 The result confirmed:
 
@@ -6006,11 +5976,11 @@ The total span count and unique trace count are different because one distribute
 
 ---
 
-## 93. Verify Common Trace IDs Across Services
+## 90. Verify Common Trace IDs Across Services
 
 The next validation was to confirm that a single distributed request had spans from both Order API and Payment Service.
 
-### 93.1 Query
+### 90.1 Query
 
 ```sql
 SELECT
@@ -6027,7 +5997,7 @@ ORDER BY last_span DESC
 LIMIT 10;
 ```
 
-### 93.2 Execute from Kubernetes
+### 90.2 Execute from Kubernetes
 
 ```bash
 kubectl exec -it -n clickhouse clickhouse-clickhouse-0-0-0 -- \
@@ -6047,7 +6017,7 @@ LIMIT 10
 "
 ```
 
-### 93.3 Observed Results
+### 90.3 Observed Results
 
 Two common Trace IDs were identified:
 
@@ -6061,7 +6031,7 @@ be75bf4ba315b1dfac9094275ebaafb8
 11 spans
 ```
 
-### 93.4 Interpretation
+### 90.4 Interpretation
 
 This validation confirmed that:
 
@@ -6074,7 +6044,7 @@ This is an important validation because it proves that the trace data is not lim
 
 ---
 
-## 94. Verify Parent-Child Span Relationships
+## 91. Verify Parent-Child Span Relationships
 
 The final major validation was to verify the relationship between parent and child spans.
 
@@ -6084,7 +6054,7 @@ We selected this common Trace ID:
 c806177ea23ba29ad09eac931261c486
 ```
 
-### 94.1 Query
+### 91.1 Query
 
 ```sql
 SELECT
@@ -6101,7 +6071,7 @@ WHERE TraceId = 'c806177ea23ba29ad09eac931261c486'
 ORDER BY Timestamp;
 ```
 
-### 94.2 Execute from Kubernetes
+### 91.2 Execute from Kubernetes
 
 ```bash
 kubectl exec -it -n clickhouse clickhouse-clickhouse-0-0-0 -- \
@@ -6121,7 +6091,7 @@ ORDER BY Timestamp
 "
 ```
 
-### 94.3 Observed Results
+### 91.3 Observed Results
 
 The query returned 11 spans.
 
@@ -6137,7 +6107,7 @@ Important records:
 
 The remaining spans included automatically generated HTTP receive and send operations.
 
-### 94.4 Parent-Child Relationship Validation
+### 91.4 Parent-Child Relationship Validation
 
 The most important relationship was:
 
@@ -6164,7 +6134,7 @@ The Payment Service server span has the same ParentSpanId as the SpanId of the O
 
 This confirms that the outgoing HTTP request from Order API and the incoming HTTP request at Payment Service are correctly correlated.
 
-### 94.5 Complete Distributed Request Flow
+### 91.5 Complete Distributed Request Flow
 
 Based on the query results, the failed payment trace followed this structure:
 
@@ -6199,7 +6169,7 @@ Order API
 
 The trace also contained HTTP instrumentation spans for request receiving and sending.
 
-### 94.6 Understanding Span Duration
+### 91.6 Understanding Span Duration
 
 The `Duration` column is stored in nanoseconds.
 
@@ -6223,7 +6193,7 @@ Therefore, the span duration was approximately:
 
 This allows us to analyze service-level execution time.
 
-### 94.7 Understanding Status Codes
+### 91.7 Understanding Status Codes
 
 The failed request included spans with:
 
@@ -6243,7 +6213,7 @@ The error-status spans from Order API and Payment Service helped identify where 
 
 ---
 
-## 95. Phase 6 Validation Summary
+## 92. Phase 6 Validation Summary
 
 The following validations were completed.
 
@@ -6281,11 +6251,11 @@ These values represent the data observed during the validation session, not perm
 
 ---
 
-## 96. Final Architecture After Phase 6
+## 93. Final Architecture After Phase 6
 
 After completing Phase 6, the observability architecture supports three separate telemetry ingestion pipelines.
 
-### 96.1 Logs Pipeline
+### 93.1 Logs Pipeline
 
 ```text
 Kubernetes Container Logs
@@ -6302,7 +6272,7 @@ observability.kubernetes_logs
 
 Fluent Bit sends Kubernetes container logs directly to ClickHouse.
 
-### 96.2 Metrics Pipeline
+### 93.2 Metrics Pipeline
 
 ```text
 Node Exporter
@@ -6327,7 +6297,7 @@ otel_metrics_summary
 
 The Collector scrapes infrastructure and application metrics using the Prometheus Receiver and exports them to ClickHouse.
 
-### 96.3 Traces Pipeline
+### 93.3 Traces Pipeline
 
 ```text
 Order API
@@ -6361,7 +6331,7 @@ OpenTelemetry SDK
 
 Both applications export traces to the same Collector, which stores the spans in ClickHouse.
 
-### 96.4 Unified Observability Storage
+### 93.4 Unified Observability Storage
 
 The current ClickHouse observability database contains:
 
@@ -6379,35 +6349,35 @@ This provides a unified storage backend for logs, metrics, and traces.
 
 ---
 
-## 97. Important Implementation Notes and Limitations
+## 94. Important Implementation Notes and Limitations
 
 The Phase 6 implementation successfully validates the distributed tracing ingestion workflow, but it is still a POC.
 
-### 97.1 Single Collector Replica
+### 94.1 Single Collector Replica
 
 The current Collector deployment uses one replica.
 
 High availability and horizontal scaling have not yet been validated.
 
-### 97.2 Single-Node Kind Cluster
+### 94.2 Single-Node Kind Cluster
 
 The implementation runs on a local Kind cluster with one Kubernetes node.
 
 It does not demonstrate production multi-node failure handling.
 
-### 97.3 Trace Retention
+### 94.3 Trace Retention
 
 A production trace-retention policy has not yet been finalized.
 
-### 97.4 Sampling
+### 94.4 Sampling
 
 A production sampling strategy has not yet been configured or load-tested.
 
-### 97.5 Performance and Load Testing
+### 94.5 Performance and Load Testing
 
 We validated successful and failed application requests, but we have not completed large-scale trace ingestion, throughput benchmarking, or Collector failure testing.
 
-### 97.6 Grafana Trace Visualization
+### 94.6 Grafana Trace Visualization
 
 Trace ingestion and ClickHouse storage have been validated.
 
@@ -6415,7 +6385,7 @@ Grafana dashboard visualization and trace exploration using ClickHouse have not 
 
 ---
 
-## 98. Phase 6 Conclusion
+## 95. Phase 6 Conclusion
 
 In Phase 6, we successfully implemented distributed tracing for the Order API and Payment Service applications using OpenTelemetry.
 
@@ -6444,7 +6414,7 @@ This completes the core distributed tracing ingestion and validation work for Ph
 
 # Phase 7: Grafana Integration with ClickHouse
 
-## 99. Objective
+## 96. Objective
 
 The objective of this phase is to integrate Grafana with ClickHouse and validate that logs, metrics, and distributed traces stored in ClickHouse can be queried and visualized through a single Grafana interface.
 
@@ -6489,7 +6459,7 @@ Grafana acts as the visualization and querying layer. ClickHouse remains the cen
 
 ---
 
-## 100. Verify Existing Grafana Installation
+## 97. Verify Existing Grafana Installation
 
 Before installing Grafana, we checked whether it was already deployed in the current Kind cluster.
 
@@ -6524,7 +6494,7 @@ Therefore, we decided to install a fresh Grafana instance in the existing `monit
 
 ---
 
-## 101. Verify Grafana Helm Repository
+## 98. Verify Grafana Helm Repository
 
 Check configured Helm repositories:
 
@@ -6563,7 +6533,7 @@ Note: Helm displayed a deprecation warning for this chart version. The warning d
 
 ---
 
-## 102. Create Grafana Helm Values File
+## 99. Create Grafana Helm Values File
 
 We created a separate values file to maintain Grafana configuration.
 
@@ -6709,7 +6679,7 @@ Requests represent the resources Kubernetes reserves for scheduling. Limits defi
 
 ---
 
-## 103. Validate Grafana Helm Template
+## 100. Validate Grafana Helm Template
 
 Before installation, we rendered the Helm chart locally to validate the generated Kubernetes resources.
 
@@ -6738,7 +6708,7 @@ This confirmed that the chart generated the expected Kubernetes resources.
 
 ---
 
-## 104. Install Grafana Using Helm
+## 101. Install Grafana Using Helm
 
 Install Grafana in the `monitoring` namespace:
 
@@ -6768,7 +6738,7 @@ Grafana was successfully installed using Helm.
 
 ---
 
-## 105. Verify Grafana Pod
+## 102. Verify Grafana Pod
 
 Check Grafana pod status:
 
@@ -6816,7 +6786,7 @@ Grafana was now healthy and ready.
 
 ---
 
-## 106. Verify Grafana Service and Persistent Volume Claim
+## 103. Verify Grafana Service and Persistent Volume Claim
 
 Check the Service and PVC:
 
@@ -6847,7 +6817,7 @@ This confirmed:
 
 ---
 
-## 107. Retrieve Grafana Admin Credentials
+## 104. Retrieve Grafana Admin Credentials
 
 The Grafana Helm chart manages administrator credentials through Kubernetes configuration and Secrets.
 
@@ -6908,7 +6878,7 @@ For this POC, the password retrieval command is documented so that credentials c
 
 ---
 
-## 108. Access Grafana Through Port Forwarding
+## 105. Access Grafana Through Port Forwarding
 
 Since Grafana Service uses `ClusterIP`, it is not directly accessible from outside the Kubernetes cluster.
 
@@ -6934,13 +6904,13 @@ admin
 
 Password:
 
-Retrieve it using the command documented in Section 107.
+Retrieve it using the command documented in Section 104.
 
 Keep the port-forward terminal running while accessing Grafana. Stopping the command terminates the local forwarding session.
 
 ---
 
-## 109. Configure ClickHouse Data Source in Grafana
+## 106. Configure ClickHouse Data Source in Grafana
 
 The next step was to connect Grafana to ClickHouse.
 
@@ -7000,7 +6970,7 @@ We then used this data source in Grafana Explore to execute SQL queries against 
 
 ---
 
-## 110. Validate Kubernetes Logs in Grafana Explore
+## 107. Validate Kubernetes Logs in Grafana Explore
 
 Navigation:
 
@@ -7028,6 +6998,7 @@ FROM observability.kubernetes_logs
 ORDER BY timestamp DESC
 LIMIT 20;
 ```
+<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/b2f50234-9f2b-4d9b-a185-f27de9d4ebf6" />
 
 ### Explanation
 
@@ -7062,6 +7033,7 @@ WHERE namespace = 'applications'
 ORDER BY timestamp DESC
 LIMIT 20;
 ```
+<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/ff92fc1d-50cc-4ae6-8698-6afdfbc47c87" />
 
 The result included records from Order API and Payment Service.
 
@@ -7081,7 +7053,7 @@ The original log content is retained in the `raw_log` column.
 
 ---
 
-## 111. Validate Metrics in Grafana Explore
+## 108. Validate Metrics in Grafana Explore
 
 Metrics are stored in ClickHouse tables created by the OpenTelemetry Collector ClickHouse exporter.
 
@@ -7108,6 +7080,8 @@ WHERE MetricName != ''
 ORDER BY TimeUnix DESC
 LIMIT 20;
 ```
+<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/ff3d1869-b308-4581-afbb-98d04c4121ee" />
+
 
 ### Explanation
 
@@ -7150,6 +7124,7 @@ WHERE ServiceName = 'order-api'
 ORDER BY TimeUnix DESC
 LIMIT 20;
 ```
+<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/f121b916-bbdf-474d-b5bb-4529315dda7a" />
 
 Payment Service:
 
@@ -7164,12 +7139,13 @@ WHERE ServiceName = 'payment-service'
 ORDER BY TimeUnix DESC
 LIMIT 20;
 ```
+<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/0b415461-42d8-4400-b6ed-88aeea3d4b5f" />
 
 Note: The `Value` field of a cumulative counter contains sampled counter values. Adding all historical samples together does not give the actual unique event count. Counter analysis should use an appropriate latest-sample or rate/delta calculation.
 
 ---
 
-## 112. Validate Distributed Traces in Grafana Explore
+## 109. Validate Distributed Traces in Grafana Explore
 
 Distributed traces are stored in:
 
@@ -7194,6 +7170,7 @@ FROM observability.otel_traces
 ORDER BY Timestamp DESC
 LIMIT 20;
 ```
+<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/c9dabc3a-69b5-49d6-9f0e-052d6da006bc" />
 
 ### Explanation of Important Trace Fields
 
@@ -7217,7 +7194,7 @@ Some spans such as `GET /metrics` were also visible. These are scrape-related HT
 
 ---
 
-## 113. Validate Trace Ingestion by Service
+## 110. Validate Trace Ingestion by Service
 
 To check the number of spans and traces stored for each service:
 
@@ -7231,6 +7208,7 @@ FROM observability.otel_traces
 GROUP BY ServiceName
 ORDER BY ServiceName;
 ```
+<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/81ff9770-b973-4556-9db1-4514441d1df7" />
 
 Observed result during validation:
 
@@ -7250,7 +7228,7 @@ This confirmed that:
 
 ---
 
-## 114. Validate Cross-Service Trace Correlation
+## 111. Validate Cross-Service Trace Correlation
 
 The main objective of distributed tracing is to follow a single request across multiple services.
 
@@ -7282,6 +7260,7 @@ HAVING uniq(ServiceName) >= 2
 ORDER BY last_seen DESC
 LIMIT 10;
 ```
+<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/7192d521-4ac8-4a83-850e-234a40803014" />
 
 The query groups spans by Trace ID and returns traces involving at least two services.
 
@@ -7303,7 +7282,7 @@ This validated cross-service trace correlation.
 
 ---
 
-## 115. Correlate Logs Using Trace ID
+## 112. Correlate Logs Using Trace ID
 
 We also validated whether application logs and distributed traces could be correlated using the same Trace ID.
 
@@ -7325,4 +7304,304 @@ SELECT
     message,
     trace_id
 FROM observability.kubernetes_logs
-WHERE trace_id = 'c806177ea23ba29ad09e
+WHERE trace_id = 'c806177ea23ba29ad09eac931261c486'
+ORDER BY timestamp ASC;
+
+<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/7b038673-cb25-43a6-9301-5ac55818361c" />
+
+
+Observed application log sequence:
+
+| Service         | Level | Message                    |
+| --------------- | ----- | -------------------------- |
+| order-api       | INFO  | Order created successfully |
+| payment-service | INFO  | Payment processing started |
+| payment-service | ERROR | Payment processing failed  |
+| order-api       | ERROR | Payment processing failed  |
+
+All four log records contained the same Trace ID.
+
+### Step 2: Find Related Traces
+
+```sql
+SELECT
+    Timestamp,
+    ServiceName,
+    SpanName,
+    TraceId,
+    SpanId,
+    ParentSpanId,
+    Duration,
+    StatusCode,
+    StatusMessage
+FROM observability.otel_traces
+WHERE TraceId = 'c806177ea23ba29ad09eac931261c486'
+ORDER BY Timestamp ASC;
+```
+<img width="1366" height="768" alt="image" src="https://github.com/user-attachments/assets/41ed92c8-748e-4396-8156-a998fdef20d9" />
+
+The query returned spans from Order API and Payment Service.
+
+### Step 3: Understand Parent-Child Relationships
+
+```text
+Order API
+|
++-- POST /orders
+    |
+    +-- order.create
+        |
+        +-- POST (HTTP Client)
+            |
+            +-- Payment Service
+                |
+                +-- POST /payments
+                    |
+                    +-- payment.process
+```
+
+Important parent-child relationship:
+
+| Service         | Span               | Span ID            | Parent Span ID     |
+| --------------- | ------------------ | ------------------ | ------------------ |
+| order-api       | POST /orders       | `4f91d27941f47f88` | Empty              |
+| order-api       | order.create       | `5617ed65019f6f22` | `4f91d27941f47f88` |
+| order-api       | POST (HTTP Client) | `aa90914507340553` | `5617ed65019f6f22` |
+| payment-service | POST /payments     | `a26a453bbcf89e54` | `aa90914507340553` |
+| payment-service | payment.process    | `1d3afae2e0e54ef1` | `a26a453bbcf89e54` |
+
+The Payment Service server span's ParentSpanId matched the Order API HTTP client span's SpanId.
+
+This confirms that the Payment Service server span is a child of the Order API HTTP client span.
+
+---
+
+## 113. Understand Trace Duration and Error Status
+
+The Order API root span showed:
+
+```text
+Duration = 36741827
+StatusCode = Error
+```
+
+The `Duration` field is stored in nanoseconds.
+
+```text
+36,741,827 nanoseconds
+= 36.74 milliseconds
+```
+
+The Payment Service `payment.process` span also showed:
+
+```text
+StatusCode = Error
+```
+
+This is consistent with the failed payment test.
+
+Some HTTP server spans showed:
+
+```text
+StatusCode = Unset
+```
+
+`Unset` does not automatically mean success or failure. It means an explicit span status was not set.
+
+For troubleshooting, inspect span attributes, status, and related application logs together.
+
+---
+
+## 114. Successful and Failed Request Validation
+
+During Phase 6, we tested two scenarios through the Order API.
+
+### Scenario 1: Successful Payment
+
+Request:
+
+```json
+{
+  "customer_id": "trace-test-success-001",
+  "amount": 500
+}
+```
+
+Expected result:
+
+```text
+HTTP 200
+Order Status: CREATED
+Payment Status: SUCCESS
+```
+
+### Scenario 2: Failed Payment
+
+Request:
+
+```json
+{
+  "customer_id": "trace-test-failure-001",
+  "amount": 15000
+}
+```
+
+The Payment Service rejects amounts greater than or equal to 10000.
+
+Expected result:
+
+```text
+Payment Service: PAYMENT_DECLINED
+Order API: HTTP 502
+```
+
+For the failed request, we validated:
+
+- Order API error logs.
+- Payment Service error logs.
+- Common Trace ID across both services.
+- Trace spans from both services.
+- Parent-child relationship between HTTP client and server spans.
+- Error status in relevant spans.
+
+---
+
+## 115. Phase 7 Validation Summary
+
+| Component                 | Validation                                          | Result     |
+| ------------------------- | --------------------------------------------------- | ---------- |
+| Grafana Deployment        | Pod running and ready                               | Successful |
+| Grafana Service           | ClusterIP service available                         | Successful |
+| Grafana PVC               | 5Gi PVC bound                                       | Successful |
+| Grafana UI                | Browser login                                       | Successful |
+| Admin Credentials         | Retrieved through Kubernetes Secret                 | Successful |
+| ClickHouse Data Source    | Connected as ClickHouse-POC                         | Successful |
+| Kubernetes Logs           | Queried `observability.kubernetes_logs`             | Successful |
+| Application Logs          | Queried Order API and Payment Service logs          | Successful |
+| Metrics                   | Queried `otel_metrics_gauge` and `otel_metrics_sum` | Successful |
+| Distributed Traces        | Queried `observability.otel_traces`                 | Successful |
+| Cross-Service Correlation | Common Trace ID found across both services          | Successful |
+| Parent-Child Spans        | ParentSpanId relationship validated                 | Successful |
+| Log-Trace Correlation     | Same Trace ID found in logs and traces              | Successful |
+
+---
+
+## 116. Current Architecture After Phase 7
+
+The POC now has three ingestion pipelines and a unified Grafana querying layer.
+
+```text
+                         Kubernetes Cluster
+                       clickhouse-unified-poc
+                                  |
+          +-----------------------+-----------------------+
+          |                       |                       |
+          v                       v                       v
+      Kubernetes             Infrastructure          Applications
+        Logs                    Metrics              Order API
+          |                       |                  Payment Service
+          v                       v                       |
+      Fluent Bit             OTel Collector               |
+          |                  Prometheus Receiver          |
+          |                       |                       |
+          |                       +----------+------------+
+          |                                  |
+          |                             OTLP Traces
+          |                                  |
+          +------------------+---------------+
+                             |
+                             v
+                        ClickHouse
+                             |
+                    observability database
+                             |
+             +---------------+---------------+
+             |               |               |
+             v               v               v
+        kubernetes_logs  otel_metrics_*   otel_traces
+             |               |               |
+             +---------------+---------------+
+                             |
+                             v
+                           Grafana
+                             |
+                 ClickHouse-POC Data Source
+                             |
+             +---------------+---------------+
+             |               |               |
+             v               v               v
+            Logs           Metrics          Traces
+```
+
+### Important Design Decisions
+
+1. Fluent Bit sends Kubernetes logs directly to ClickHouse.
+2. The OpenTelemetry Collector handles metrics scraping and trace ingestion.
+3. Prometheus Server is not used in this POC.
+4. ClickHouse is the common storage backend for logs, metrics, and traces.
+5. Grafana uses the ClickHouse data source to query all three data types.
+6. Trace IDs provide a common correlation key between application logs and distributed traces.
+
+---
+
+## 117. Current Limitations and Future Improvements
+
+The current setup is a functional POC, not a production-ready HA deployment.
+
+### Grafana Availability
+
+- Only one Grafana replica is deployed.
+- No Grafana HA configuration has been tested.
+- Grafana is exposed through port forwarding, not through Ingress or an external LoadBalancer.
+
+### Logs
+
+- Some logs have `UNKNOWN` severity.
+- Fluent Bit Lua parsing needs improvements for different log formats.
+- Application attributes are not yet fully extracted into structured ClickHouse columns.
+- Original log content is preserved in `raw_log`.
+
+### Metrics
+
+- Metric visualization and dashboard panel design are still pending.
+- Counter values need correct rate or delta calculations for meaningful time-series analysis.
+- Metric retention and long-term storage policies have not been finalized.
+
+### Traces
+
+- Trace ingestion and correlation are validated.
+- Trace visualization and detailed service dependency views still need dashboard-level configuration.
+- Scrape-related `/metrics` spans are also present and may need filtering in application trace views.
+
+### Production Readiness
+
+The following items are outside the current validation scope:
+
+- Multi-node and multi-replica HA testing.
+- Grafana authentication and access-control hardening.
+- ClickHouse backup and recovery.
+- Retention and TTL policies.
+- Load testing and ingestion benchmarking.
+- Resource utilization and capacity planning.
+
+---
+
+## 118. Final Outcome of Phase 7
+
+Grafana was successfully deployed in the `monitoring` namespace using Helm.
+
+The Grafana instance was connected to ClickHouse through the `ClickHouse-POC` data source.
+
+The following validations were completed through Grafana Explore:
+
+1. Kubernetes logs were queried from `observability.kubernetes_logs`.
+2. Order API and Payment Service logs were queried separately.
+3. Infrastructure and application metrics were queried from ClickHouse metric tables.
+4. Distributed traces were queried from `observability.otel_traces`.
+5. Common Trace IDs across Order API and Payment Service were identified.
+6. Parent-child span relationships were validated.
+7. Logs and traces were correlated using the same Trace ID.
+8. A failed payment request was traced across both services using logs and spans.
+9. Grafana administrator credentials were retrieved from the Kubernetes Secret.
+
+**Conclusion:** The POC demonstrates that ClickHouse can act as the centralized storage backend for Kubernetes logs, infrastructure/application metrics, and distributed traces, while Grafana provides a common interface to query and inspect this observability data.

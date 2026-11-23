@@ -6441,3 +6441,888 @@ We also verified:
 The POC now supports centralized storage of Kubernetes logs, infrastructure/application metrics, and distributed traces in ClickHouse.
 
 This completes the core distributed tracing ingestion and validation work for Phase 6.
+
+# Phase 7: Grafana Integration with ClickHouse
+
+## 99. Objective
+
+The objective of this phase is to integrate Grafana with ClickHouse and validate that logs, metrics, and distributed traces stored in ClickHouse can be queried and visualized through a single Grafana interface.
+
+In the previous phases, we configured three separate ingestion pipelines:
+
+1. **Logs:** Kubernetes container logs are collected by Fluent Bit and sent directly to ClickHouse.
+2. **Metrics:** Node Exporter, cAdvisor, kube-state-metrics, Order API, and Payment Service metrics are scraped by the OpenTelemetry Collector Prometheus Receiver and exported to ClickHouse.
+3. **Traces:** Order API and Payment Service generate distributed traces using OpenTelemetry SDKs. Traces are sent to the OpenTelemetry Collector through OTLP HTTP and stored in ClickHouse.
+
+In this phase, Grafana is deployed inside the Kubernetes cluster and connected to ClickHouse.
+
+### Target Architecture
+
+```text
+                  Kubernetes Cluster
+                 clickhouse-unified-poc
+                           |
+          +----------------+----------------+
+          |                |                |
+          v                v                v
+     Fluent Bit       OTel Collector    Application SDKs
+          |            Prometheus          OTLP HTTP
+          |             Receiver              |
+          v                +------------------+
+     ClickHouse                  |
+          |                     |
+          +----------+----------+
+                     |
+                     v
+                ClickHouse
+                     |
+                     v
+                  Grafana
+                     |
+          +----------+----------+
+          |          |          |
+          v          v          v
+         Logs      Metrics    Traces
+```
+
+Grafana acts as the visualization and querying layer. ClickHouse remains the centralized storage backend.
+
+---
+
+## 100. Verify Existing Grafana Installation
+
+Before installing Grafana, we checked whether it was already deployed in the current Kind cluster.
+
+```bash
+kubectl get pods -A | grep -i grafana
+```
+
+No Grafana pod was returned.
+
+We also checked existing Helm releases:
+
+```bash
+helm list -A
+```
+
+There was no Grafana release in the current cluster.
+
+The `monitoring` namespace already existed:
+
+```bash
+kubectl get namespace monitoring
+```
+
+Expected output:
+
+```text
+NAME         STATUS
+monitoring   Active
+```
+
+Therefore, we decided to install a fresh Grafana instance in the existing `monitoring` namespace.
+
+---
+
+## 101. Verify Grafana Helm Repository
+
+Check configured Helm repositories:
+
+```bash
+helm repo list
+```
+
+Grafana repository:
+
+```text
+grafana    https://grafana.github.io/helm-charts
+```
+
+Update Helm repositories:
+
+```bash
+helm repo update
+```
+
+Search for the Grafana chart:
+
+```bash
+helm search repo grafana/grafana
+```
+
+Selected chart details:
+
+| Component | Version |
+|---|---|
+| Helm Chart | 10.5.15 |
+| Grafana Application | 12.3.1 |
+
+The chart was selected for this POC installation.
+
+Note: Helm displayed a deprecation warning for this chart version. The warning did not prevent installation.
+
+---
+
+## 102. Create Grafana Helm Values File
+
+We created a separate values file to maintain Grafana configuration.
+
+File location:
+
+```text
+~/clickhouse-unified-poc/configs/grafana-values.yaml
+```
+
+Create or edit:
+
+```bash
+nano ~/clickhouse-unified-poc/configs/grafana-values.yaml
+```
+
+### Grafana Values Configuration
+
+```yaml
+replicas: 1
+
+image:
+  repository: grafana/grafana
+  tag: "12.3.1"
+  pullPolicy: IfNotPresent
+
+adminUser: admin
+adminPassword: "admin"
+
+service:
+  enabled: true
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+
+persistence:
+  type: pvc
+  enabled: true
+  storageClassName: standard
+  accessModes:
+    - ReadWriteOnce
+  size: 5Gi
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+```
+
+### Configuration Explanation
+
+**1. Replicas**
+
+```yaml
+replicas: 1
+```
+
+Only one Grafana pod is deployed. This is sufficient for the current single-node Kind POC, but it is not an HA Grafana configuration.
+
+**2. Image**
+
+```yaml
+image:
+  repository: grafana/grafana
+  tag: "12.3.1"
+  pullPolicy: IfNotPresent
+```
+
+Defines the Grafana container image and application version.
+
+**3. Admin Credentials**
+
+```yaml
+adminUser: admin
+adminPassword: "admin"
+```
+
+These are top-level Helm chart properties.
+
+- `adminUser`: Sets the Grafana administrator username.
+- `adminPassword`: Sets the Grafana administrator password.
+
+Important: These properties must not be placed inside an `admin:` block.
+
+For this POC, the example password is `admin`. This is only suitable for a local test environment. A production deployment should use a strong password and manage it through a Kubernetes Secret or another secret-management solution.
+
+**4. Service**
+
+```yaml
+service:
+  enabled: true
+  type: ClusterIP
+  port: 80
+  targetPort: 3000
+```
+
+Creates an internal Kubernetes Service.
+
+- `ClusterIP`: Exposes Grafana inside the Kubernetes cluster.
+- `port: 80`: Service port.
+- `targetPort: 3000`: Grafana container port.
+
+**5. Persistence**
+
+```yaml
+persistence:
+  type: pvc
+  enabled: true
+  storageClassName: standard
+  accessModes:
+    - ReadWriteOnce
+  size: 5Gi
+```
+
+Enables persistent storage for Grafana.
+
+Grafana stores its internal database, dashboards, data source configurations, and application state under its data directory.
+
+The PVC ensures that this data is not tied only to the lifetime of the container.
+
+**6. Resource Requests and Limits**
+
+```yaml
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+```
+
+Defines the resource allocation for Grafana.
+
+| Resource | Request | Limit |
+|---|---:|---:|
+| CPU | 100m | 500m |
+| Memory | 128Mi | 512Mi |
+
+Requests represent the resources Kubernetes reserves for scheduling. Limits define the maximum resources the container can consume.
+
+---
+
+## 103. Validate Grafana Helm Template
+
+Before installation, we rendered the Helm chart locally to validate the generated Kubernetes resources.
+
+```bash
+helm template grafana grafana/grafana \
+  --version 10.5.15 \
+  --namespace monitoring \
+  -f ~/clickhouse-unified-poc/configs/grafana-values.yaml \
+  > /tmp/grafana-rendered.yaml
+```
+
+Check generated resource types:
+
+```bash
+grep -E 'kind: (Deployment|Service|PersistentVolumeClaim)' \
+  /tmp/grafana-rendered.yaml
+```
+
+The rendered output contained:
+
+- PersistentVolumeClaim
+- Service
+- Deployment
+
+This confirmed that the chart generated the expected Kubernetes resources.
+
+---
+
+## 104. Install Grafana Using Helm
+
+Install Grafana in the `monitoring` namespace:
+
+```bash
+helm install grafana grafana/grafana \
+  --version 10.5.15 \
+  --namespace monitoring \
+  -f ~/clickhouse-unified-poc/configs/grafana-values.yaml
+```
+
+Installation result:
+
+```text
+NAME: grafana
+NAMESPACE: monitoring
+STATUS: deployed
+REVISION: 1
+```
+
+Verify the Helm release:
+
+```bash
+helm list -n monitoring
+```
+
+Grafana was successfully installed using Helm.
+
+---
+
+## 105. Verify Grafana Pod
+
+Check Grafana pod status:
+
+```bash
+kubectl get pods -n monitoring
+```
+
+Initially, the pod showed:
+
+```text
+NAME                       READY   STATUS
+grafana-698f46548b-xqlb7   0/1     Running
+```
+
+The container was running, but its readiness probe was temporarily failing because Grafana was still starting.
+
+We checked the application logs:
+
+```bash
+kubectl logs grafana-698f46548b-xqlb7 \
+  -n monitoring --tail=30
+```
+
+The logs eventually showed:
+
+```text
+HTTP Server Listen address=[::]:3000 protocol=http
+All modules healthy
+```
+
+After startup, we checked the pod again:
+
+```bash
+kubectl get pods -n monitoring
+```
+
+Final status:
+
+```text
+NAME                       READY   STATUS
+grafana-698f46548b-xqlb7   1/1     Running
+```
+
+Grafana was now healthy and ready.
+
+---
+
+## 106. Verify Grafana Service and Persistent Volume Claim
+
+Check the Service and PVC:
+
+```bash
+kubectl get svc,pvc -n monitoring
+```
+
+Observed Service:
+
+```text
+NAME              TYPE        CLUSTER-IP     PORT(S)
+service/grafana   ClusterIP   10.96.85.214   80/TCP
+```
+
+Observed PVC:
+
+```text
+NAME      STATUS   CAPACITY   ACCESS MODES   STORAGECLASS
+grafana   Bound    5Gi        RWO            standard
+```
+
+This confirmed:
+
+- Grafana Service was created successfully.
+- Grafana was accessible through its internal ClusterIP Service.
+- Grafana PVC was successfully bound to a PersistentVolume.
+- The configured 5Gi persistent storage was available.
+
+---
+
+## 107. Retrieve Grafana Admin Credentials
+
+The Grafana Helm chart manages administrator credentials through Kubernetes configuration and Secrets.
+
+To inspect the generated Secret:
+
+```bash
+kubectl get secrets -n monitoring | grep grafana
+```
+
+To retrieve the admin username:
+
+```bash
+kubectl get secret grafana \
+  -n monitoring \
+  -o jsonpath="{.data.admin-user}" | base64 --decode
+echo
+```
+
+To retrieve and display the admin password:
+
+```bash
+kubectl get secret grafana \
+  -n monitoring \
+  -o jsonpath="{.data.admin-password}" | base64 --decode
+echo
+```
+
+To display both credentials together:
+
+```bash
+echo "Grafana Username:"
+kubectl get secret grafana \
+  -n monitoring \
+  -o jsonpath="{.data.admin-user}" | base64 --decode
+echo
+
+echo "Grafana Password:"
+kubectl get secret grafana \
+  -n monitoring \
+  -o jsonpath="{.data.admin-password}" | base64 --decode
+echo
+```
+
+### Explanation
+
+- `kubectl get secret`: Reads the Kubernetes Secret.
+- `-n monitoring`: Selects the Grafana namespace.
+- `jsonpath`: Extracts the requested Secret field.
+- `.data.admin-user`: Reads the encoded admin username.
+- `.data.admin-password`: Reads the encoded admin password.
+- `base64 --decode`: Decodes the Base64-encoded value.
+
+Important security note:
+
+Kubernetes Secret values are Base64 encoded, not encrypted by Base64 itself. Do not expose this output in public logs, screenshots, Git repositories, or shared documentation.
+
+For this POC, the password retrieval command is documented so that credentials can be recovered when required.
+
+---
+
+## 108. Access Grafana Through Port Forwarding
+
+Since Grafana Service uses `ClusterIP`, it is not directly accessible from outside the Kubernetes cluster.
+
+We used Kubernetes port forwarding to access Grafana locally.
+
+```bash
+kubectl port-forward -n monitoring svc/grafana 3000:80
+```
+
+Open the following URL in the browser:
+
+```text
+http://localhost:3000
+```
+
+### Login
+
+Username:
+
+```text
+admin
+```
+
+Password:
+
+Retrieve it using the command documented in Section 107.
+
+Keep the port-forward terminal running while accessing Grafana. Stopping the command terminates the local forwarding session.
+
+---
+
+## 109. Configure ClickHouse Data Source in Grafana
+
+The next step was to connect Grafana to ClickHouse.
+
+Navigation:
+
+```text
+Grafana
+    |
+    +-- Connections
+            |
+            +-- Add new connection
+                    |
+                    +-- ClickHouse
+```
+
+Select the ClickHouse data source and configure the connection.
+
+### ClickHouse Connection Details
+
+| Setting | Value |
+|---|---|
+| Data Source Name | ClickHouse-POC |
+| Host / Address | clickhouse-clickhouse-headless.clickhouse.svc.cluster.local |
+| Port | 8123 |
+| Protocol | HTTP |
+| Database | observability |
+| Username | default |
+| Password | Leave empty if no password is configured |
+
+The ClickHouse Service DNS name is:
+
+```text
+clickhouse-clickhouse-headless.clickhouse.svc.cluster.local
+```
+
+The HTTP interface uses port `8123`.
+
+The native ClickHouse protocol uses port `9000`. For this Grafana HTTP data source configuration, we use port `8123`.
+
+### Why Kubernetes DNS?
+
+Grafana and ClickHouse are running inside the same Kubernetes cluster.
+
+Kubernetes DNS allows Grafana to access ClickHouse through its Service name without hardcoding the ClickHouse pod IP.
+
+### Data Source Validation
+
+After configuring the connection, save and test the data source.
+
+The configured data source appeared in Grafana as:
+
+```text
+ClickHouse-POC
+```
+
+We then used this data source in Grafana Explore to execute SQL queries against the `observability` database.
+
+---
+
+## 110. Validate Kubernetes Logs in Grafana Explore
+
+Navigation:
+
+```text
+Grafana
+    |
+    +-- Explore
+            |
+            +-- Select ClickHouse-POC
+```
+
+First, validate the Kubernetes logs table.
+
+```sql
+SELECT
+    timestamp,
+    namespace,
+    pod_name,
+    container_name,
+    service_name,
+    level,
+    message,
+    trace_id
+FROM observability.kubernetes_logs
+ORDER BY timestamp DESC
+LIMIT 20;
+```
+
+### Explanation
+
+| Column | Description |
+|---|---|
+| timestamp | Time when the log event was recorded |
+| namespace | Kubernetes namespace |
+| pod_name | Name of the Kubernetes pod |
+| container_name | Container that generated the log |
+| service_name | Application or service name |
+| level | Normalized log severity |
+| message | Extracted log message |
+| trace_id | Trace identifier associated with the log, when available |
+
+The query returned records from Kubernetes namespaces, including `kube-system`, `logging`, and `applications`.
+
+This confirmed that Grafana could query Kubernetes logs stored in ClickHouse.
+
+### Validate Application Logs Separately
+
+```sql
+SELECT
+    timestamp,
+    namespace,
+    pod_name,
+    service_name,
+    level,
+    message,
+    trace_id
+FROM observability.kubernetes_logs
+WHERE namespace = 'applications'
+ORDER BY timestamp DESC
+LIMIT 20;
+```
+
+The result included records from Order API and Payment Service.
+
+### Important Observation: UNKNOWN Log Level
+
+Some records showed:
+
+```text
+level = UNKNOWN
+```
+
+This does not mean logs were missing or the ClickHouse query failed.
+
+The current Fluent Bit Lua transformation does not successfully extract a recognized severity from every log format. Some plain-text or non-standard log records are therefore classified as `UNKNOWN`.
+
+The original log content is retained in the `raw_log` column.
+
+---
+
+## 111. Validate Metrics in Grafana Explore
+
+Metrics are stored in ClickHouse tables created by the OpenTelemetry Collector ClickHouse exporter.
+
+Important metrics tables:
+
+```text
+observability.otel_metrics_gauge
+observability.otel_metrics_sum
+observability.otel_metrics_histogram
+observability.otel_metrics_summary
+observability.otel_metrics_exponential_histogram
+```
+
+Validate the latest metric samples:
+
+```sql
+SELECT
+    ServiceName,
+    MetricName,
+    Value,
+    TimeUnix
+FROM observability.otel_metrics_gauge
+WHERE MetricName != ''
+ORDER BY TimeUnix DESC
+LIMIT 20;
+```
+
+### Explanation
+
+| Column | Description |
+|---|---|
+| ServiceName | Service or scrape target that produced the metric |
+| MetricName | Name of the metric |
+| Value | Recorded metric value |
+| TimeUnix | Timestamp associated with the metric sample |
+
+The query returned metrics from:
+
+- `order-api`
+- `payment-service`
+- Node Exporter
+- kube-state-metrics
+- cAdvisor
+
+### Validate Application Metrics
+
+Examples of custom application metrics:
+
+```text
+orders_created_total
+payments_processed_total
+order_request_duration_seconds
+payment_request_duration_seconds
+```
+
+Order API:
+
+```sql
+SELECT
+    ServiceName,
+    MetricName,
+    Value,
+    TimeUnix
+FROM observability.otel_metrics_sum
+WHERE ServiceName = 'order-api'
+ORDER BY TimeUnix DESC
+LIMIT 20;
+```
+
+Payment Service:
+
+```sql
+SELECT
+    ServiceName,
+    MetricName,
+    Value,
+    TimeUnix
+FROM observability.otel_metrics_sum
+WHERE ServiceName = 'payment-service'
+ORDER BY TimeUnix DESC
+LIMIT 20;
+```
+
+Note: The `Value` field of a cumulative counter contains sampled counter values. Adding all historical samples together does not give the actual unique event count. Counter analysis should use an appropriate latest-sample or rate/delta calculation.
+
+---
+
+## 112. Validate Distributed Traces in Grafana Explore
+
+Distributed traces are stored in:
+
+```text
+observability.otel_traces
+```
+
+Execute:
+
+```sql
+SELECT
+    Timestamp,
+    ServiceName,
+    SpanName,
+    TraceId,
+    SpanId,
+    ParentSpanId,
+    Duration,
+    StatusCode,
+    StatusMessage
+FROM observability.otel_traces
+ORDER BY Timestamp DESC
+LIMIT 20;
+```
+
+### Explanation of Important Trace Fields
+
+| Field | Description |
+|---|---|
+| Timestamp | Span start timestamp |
+| ServiceName | Service that generated the span |
+| SpanName | Operation represented by the span |
+| TraceId | Unique identifier shared by spans in the same trace |
+| SpanId | Unique identifier of an individual span |
+| ParentSpanId | Identifier of the parent span |
+| Duration | Span duration in nanoseconds |
+| StatusCode | Span status |
+| StatusMessage | Additional status information |
+
+The query returned spans from both `order-api` and `payment-service`.
+
+This confirmed that distributed tracing data was available through Grafana.
+
+Some spans such as `GET /metrics` were also visible. These are scrape-related HTTP operations generated when the Prometheus Receiver scrapes application metrics endpoints.
+
+---
+
+## 113. Validate Trace Ingestion by Service
+
+To check the number of spans and traces stored for each service:
+
+```sql
+SELECT
+    ServiceName,
+    count() AS total_spans,
+    uniq(TraceId) AS unique_traces,
+    max(Timestamp) AS latest_trace
+FROM observability.otel_traces
+GROUP BY ServiceName
+ORDER BY ServiceName;
+```
+
+Observed result during validation:
+
+| ServiceName | Total Spans | Unique Traces |
+|---|---:|---:|
+| order-api | 1443 | 479 |
+| payment-service | 1432 | 476 |
+
+These are point-in-time observations and can change as the applications continue generating traffic and traces.
+
+This confirmed that:
+
+- Both services are exporting traces.
+- ClickHouse is storing spans from both services.
+- Multiple traces are available for each service.
+- Grafana can query service-wise trace information.
+
+---
+
+## 114. Validate Cross-Service Trace Correlation
+
+The main objective of distributed tracing is to follow a single request across multiple services.
+
+In our POC:
+
+```text
+Order API
+    |
+    | HTTP request
+    v
+Payment Service
+```
+
+Both services participate in the same distributed trace.
+
+Find traces containing spans from multiple services:
+
+```sql
+SELECT
+    TraceId,
+    groupUniqArray(ServiceName) AS services,
+    count() AS total_spans,
+    min(Timestamp) AS first_seen,
+    max(Timestamp) AS last_seen
+FROM observability.otel_traces
+WHERE Timestamp >= now() - INTERVAL 24 HOURS
+GROUP BY TraceId
+HAVING uniq(ServiceName) >= 2
+ORDER BY last_seen DESC
+LIMIT 10;
+```
+
+The query groups spans by Trace ID and returns traces involving at least two services.
+
+Observed common Trace IDs included:
+
+```text
+c806177ea23ba29ad09eac931261c486
+be75bf4ba315b1dfac9094275ebaafb8
+```
+
+Both traces contained spans from:
+
+```text
+order-api
+payment-service
+```
+
+This validated cross-service trace correlation.
+
+---
+
+## 115. Correlate Logs Using Trace ID
+
+We also validated whether application logs and distributed traces could be correlated using the same Trace ID.
+
+For this test, we used:
+
+```text
+c806177ea23ba29ad09eac931261c486
+```
+
+### Step 1: Find Related Logs
+
+```sql
+SELECT
+    timestamp,
+    namespace,
+    pod_name,
+    service_name,
+    level,
+    message,
+    trace_id
+FROM observability.kubernetes_logs
+WHERE trace_id = 'c806177ea23ba29ad09e

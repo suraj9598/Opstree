@@ -1,6 +1,6 @@
 # ClickHouse Unified Observability
 ## 1. Project Overview, Architectural Scope & Environment Specifications
-### 1.1 Objective and Foundational Strategy
+### 1.1 Objective
 The primary objective of this Proof of Concept (POC) is to evaluate **ClickHouse as a centralized, high-performance analytical storage backend (OLAP)** capable of unifying the three primary IT observability signals:
 * **Logs:** Capturing container stdout and stderr events from Kubernetes workloads, including structured application events.
 * **Metrics:** Scraping continuous infrastructure, container, and business-level time-series measurements.
